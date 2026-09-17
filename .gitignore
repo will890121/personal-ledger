@@ -1,0 +1,8 @@
+.env
+.DS_Store
+coverage/
+data/
+dist/
+node_modules/
+.pnpm-store/
+.worktrees/

@@ -1,0 +1,41 @@
+{
+  "name": "personal-ledger",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ledger Bot personal finance service.",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=10 <12"
+  },
+  "packageManager": "pnpm@10.19.0",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node --enable-source-maps dist/src/main.js",
+    "build": "tsc -p tsconfig.json",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm format:check && pnpm test:run && pnpm typecheck && pnpm lint && pnpm build",
+    "verify:m0": "pnpm check && docker compose config && docker build -t personal-ledger:m0 ."
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "decimal.js": "^10.6.0",
+    "grammy": "^1.38.4",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.5.0",
+    "eslint": "^9.35.0",
+    "prettier": "^3.9.7",
+    "tsx": "^4.20.5",
+    "typescript": "^6.0.0-dev.20260917",
+    "typescript-eslint": "^8.44.0",
+    "vitest": "^3.2.4"
+  }
+}
