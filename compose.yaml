@@ -1,0 +1,16 @@
+services:
+  ledger-bot:
+    build: .
+    image: personal-ledger:local
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      LEDGER_OWNER_ID: ${LEDGER_OWNER_ID}
+      DATABASE_PATH: /app/data/personal-ledger.sqlite
+      TZ: Asia/Taipei
+      LEDGER_CURRENCY: TWD
+    volumes:
+      - ledger-data:/app/data
+
+volumes:
+  ledger-data:
