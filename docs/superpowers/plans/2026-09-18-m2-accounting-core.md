@@ -80,7 +80,7 @@ tests/
 - 產出：擴充後的 `AllocationSchema`、`TransactionDraftSchema`、`ConfirmedTransactionSchema`
 - 產出：`validateAccountingShape(entry): void`，由 Zod `superRefine` 使用
 
-- [ ] **步驟 1：先寫參照資料 schema 失敗測試**
+- [x] **步驟 1：先寫參照資料 schema 失敗測試**
 
 ```ts
 it("拒絕非 TWD 帳戶與超過兩層的分類", () => {
@@ -105,12 +105,12 @@ it("拒絕非 TWD 帳戶與超過兩層的分類", () => {
 });
 ```
 
-- [ ] **步驟 2：執行測試並確認因 module 不存在而失敗**
+- [x] **步驟 2：執行測試並確認因 module 不存在而失敗**
 
 執行：`pnpm test:run tests/domain/reference-data.test.ts`  
 預期：FAIL，無法匯入 `src/domain/reference-data.ts`。
 
-- [ ] **步驟 3：實作參照資料 schema**
+- [x] **步驟 3：實作參照資料 schema**
 
 ```ts
 export const AccountTypeSchema = z.enum(["cash", "bank", "credit_card", "e_wallet"]);
@@ -137,7 +137,7 @@ export const CategorySchema = z.object({
 
 Merchant、Counterparty 與 Tag 使用相同的 owner-scoped identity、非空名稱及 active 狀態；Tag 另保存 `normalizedName`。
 
-- [ ] **步驟 4：先寫合法帳務形狀表格測試**
+- [x] **步驟 4：先寫合法帳務形狀表格測試**
 
 ```ts
 it.each([
@@ -162,7 +162,7 @@ it.each([
 });
 ```
 
-- [ ] **步驟 5：擴充交易與配置 schema**
+- [x] **步驟 5：擴充交易與配置 schema**
 
 新增 `categoryId`、`counterpartyId`、`note` 至 allocation；新增 `occurredTime`、帳戶、商家、交易對象、tag IDs、note、source type/ref 與 lifecycle timestamps 至 ledger entry。保留 M1 parser 需要的 `category` 與 `subcategory` 相容讀取只到 migration 完成；新的 domain object 一律輸出 ID。
 
@@ -183,7 +183,7 @@ const supportedShapes = new Set([
 
 另驗證 internal transfer 兩個帳戶必填且不同、信用卡消費不得有目的帳戶、所有配置幣別一致及總額精確相等。
 
-- [ ] **步驟 6：執行領域品質檢查**
+- [x] **步驟 6：執行領域品質檢查**
 
 執行：
 
@@ -195,7 +195,7 @@ pnpm lint
 
 預期：全部通過。
 
-- [ ] **步驟 7：提交領域模型**
+- [x] **步驟 7：提交領域模型**
 
 ```bash
 git add src/domain/ledger.ts src/domain/reference-data.ts tests/domain
