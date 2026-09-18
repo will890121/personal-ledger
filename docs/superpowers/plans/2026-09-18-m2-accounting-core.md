@@ -455,11 +455,11 @@ git commit -m "feat: audit confirmed ledger mutations"
 - 產出：`SummaryRepository.summarize(ownerId, range)`
 - 產出：`getTodaySummary()`、`getMonthSummary()`
 
-- [ ] **步驟 1：建立固定帳務 fixture**
+- [x] **步驟 1：建立固定帳務 fixture**
 
 Fixture 至少包含：收入 85,000、現金支出 120、信用卡支出 1,200、內部轉帳 5,000、卡費 18,000、轉帳費 15、現金退款 990、已刪除支出 500。每筆配置明確指定 category。
 
-- [ ] **步驟 2：先寫純領域統計失敗測試**
+- [x] **步驟 2：先寫純領域統計失敗測試**
 
 ```ts
 expect(summarizeAllocations(fixture.effectiveAllocations)).toMatchObject({
@@ -476,19 +476,19 @@ expect(summarizeAllocations(fixture.effectiveAllocations)).toMatchObject({
 
 另寫退款大於當期支出時淨支出為負數、零值仍以 `0` 表示、Decimal `0.1 + 0.2` 精確等於 `0.3`。
 
-- [ ] **步驟 3：實作純領域摘要**
+- [x] **步驟 3：實作純領域摘要**
 
 使用 Decimal reduce，最後才轉回 canonical string。分類結果依淨支出遞減、category key 遞增穩定排序。
 
-- [ ] **步驟 4：先寫 SQLite summary integration test**
+- [x] **步驟 4：先寫 SQLite summary integration test**
 
 驗證 date range inclusive、owner 隔離、deleted 排除、internal/none 對資金口徑無影響、refund 沖減分類。
 
-- [ ] **步驟 5：實作 summary repository 與日期 application service**
+- [x] **步驟 5：實作 summary repository 與日期 application service**
 
 Repository 只載入範圍內的有效 allocation projection，再交給 domain summarize；不得用 SQLite 浮點 `SUM`。Application service 注入 `today(): string`，month 起日以字串安全計算為 `YYYY-MM-01`。
 
-- [ ] **步驟 6：執行摘要測試**
+- [x] **步驟 6：執行摘要測試**
 
 ```bash
 pnpm test:run tests/domain/ledger-summary.test.ts tests/db/sqlite-summary-repository.test.ts
@@ -496,7 +496,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 7：提交摘要能力**
+- [x] **步驟 7：提交摘要能力**
 
 ```bash
 git add src/domain/ledger-summary.ts src/ports/summary-repository.ts src/db/sqlite-summary-repository.ts src/application/ledger-summary.ts tests/domain tests/db tests/fixtures/accounting-scenarios.ts
