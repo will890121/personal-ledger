@@ -20,7 +20,7 @@ describe("runtime composition", () => {
     const directory = mkdtempSync(join(tmpdir(), "personal-ledger-runtime-"));
     temporaryDirectories.push(directory);
 
-    const runtime = composeRuntime({
+    const runtime = await composeRuntime({
       telegramBotToken: "test-token",
       ownerId: "123",
       databasePath: join(directory, "nested", "ledger.sqlite"),
@@ -62,6 +62,12 @@ describe("runtime composition", () => {
       await runtime.repository.saveDraft(draft);
 
       await expect(runtime.repository.getDraft("draft-1")).resolves.toEqual(draft);
+      await expect(
+        runtime.referenceRepository.findCategoryByKey("123", "expense_dining_lunch"),
+      ).resolves.toMatchObject({ name: "午餐" });
+      await expect(
+        runtime.referenceRepository.findAccountByName("123", "現金"),
+      ).resolves.toHaveLength(1);
       expect(
         runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
       ).toEqual([{ version: 1 }, { version: 2 }]);

@@ -304,7 +304,7 @@ git commit -m "feat: migrate m1 ledger data to accounting core"
 - 產出：`bootstrapReferenceData(repository, ownerId): Promise<void>`
 - 產出：owner-scoped `getAccount`、`findAccountByName`、`getCategory`、`findCategoryByKey`、`upsertMerchant`、`upsertCounterparty`、`upsertTag`
 
-- [ ] **步驟 1：先定義 port 與失敗 contract tests**
+- [x] **步驟 1：先定義 port 與失敗 contract tests**
 
 ```ts
 export interface ReferenceRepository {
@@ -322,16 +322,16 @@ export interface ReferenceRepository {
 
 測試相同名稱在不同 owner 可共存、停用資料仍可依 ID 讀取、模糊名稱回傳多候選、tag Unicode normalization 冪等。
 
-- [ ] **步驟 2：執行測試並確認 adapter 不存在**
+- [x] **步驟 2：執行測試並確認 adapter 不存在**
 
 執行：`pnpm test:run tests/db/sqlite-reference-repository.test.ts`  
 預期：FAIL，無法匯入 SQLite adapter。
 
-- [ ] **步驟 3：實作 SQLite reference adapter**
+- [x] **步驟 3：實作 SQLite reference adapter**
 
 所有查詢同時使用 `owner_id` 與 entity ID。名稱查詢使用持久化的 `normalized_name`，不得以 application-side 全表掃描比對。
 
-- [ ] **步驟 4：先寫 bootstrap 冪等測試**
+- [x] **步驟 4：先寫 bootstrap 冪等測試**
 
 連續執行兩次 bootstrap 後，預設 category 與 account row counts 必須相同。至少建立：
 
@@ -339,11 +339,11 @@ export interface ReferenceRepository {
 - 收入根分類與薪資、獎金、投資收入、其他收入；
 - 預設現金帳戶。
 
-- [ ] **步驟 5：實作 bootstrap 並接入 runtime composition**
+- [x] **步驟 5：實作 bootstrap 並接入 runtime composition**
 
 在 `composeRuntime` 完成 migration 後、建立 Bot 前呼叫 bootstrap。由 `LEDGER_OWNER_ID` 作為 owner ID；使用 stable keys，不使用顯示名稱作識別。
 
-- [ ] **步驟 6：執行參照與 smoke 測試**
+- [x] **步驟 6：執行參照與 smoke 測試**
 
 ```bash
 pnpm test:run tests/db/sqlite-reference-repository.test.ts tests/db/bootstrap-reference-data.test.ts tests/smoke/runtime.test.ts
@@ -351,7 +351,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 7：提交參照資料能力**
+- [x] **步驟 7：提交參照資料能力**
 
 ```bash
 git add src/ports/reference-repository.ts src/db/sqlite-reference-repository.ts src/db/bootstrap-reference-data.ts src/main.ts tests/db tests/smoke/runtime.test.ts
