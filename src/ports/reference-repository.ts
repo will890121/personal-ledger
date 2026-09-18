@@ -7,6 +7,9 @@ export interface NamedReferenceInput {
 }
 
 export interface ReferenceRepository {
+  listActiveAccounts(ownerId: string): Promise<Account[]>;
+  listActiveCategories(ownerId: string): Promise<Category[]>;
+  listActiveMerchants(ownerId: string): Promise<Merchant[]>;
   getAccount(ownerId: string, accountId: string): Promise<Account | null>;
   findAccountByName(ownerId: string, name: string): Promise<Account[]>;
   getCategory(ownerId: string, categoryId: string): Promise<Category | null>;

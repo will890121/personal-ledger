@@ -51,6 +51,42 @@ export function normalizeReferenceName(name: string): string {
 export class SqliteReferenceRepository implements ReferenceRepository {
   public constructor(private readonly database: Database.Database) {}
 
+  public listActiveAccounts(ownerId: string): Promise<Account[]> {
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM accounts WHERE owner_id = ? AND active = 1 ORDER BY normalized_name, account_id",
+      )
+      .all(ownerId) as AccountRow[];
+    return Promise.resolve(rows.map((row) => this.toAccount(row)));
+  }
+
+  public listActiveCategories(ownerId: string): Promise<Category[]> {
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM categories WHERE owner_id = ? AND active = 1 ORDER BY key, category_id",
+      )
+      .all(ownerId) as CategoryRow[];
+    return Promise.resolve(rows.map((row) => this.toCategory(row)));
+  }
+
+  public listActiveMerchants(ownerId: string): Promise<Merchant[]> {
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM merchants WHERE owner_id = ? AND active = 1 ORDER BY normalized_name, merchant_id",
+      )
+      .all(ownerId) as NamedRow[];
+    return Promise.resolve(
+      rows.map((row) =>
+        MerchantSchema.parse({
+          merchantId: row.merchant_id,
+          ownerId: row.owner_id,
+          name: row.name,
+          active: true,
+        }),
+      ),
+    );
+  }
+
   public getAccount(ownerId: string, accountId: string): Promise<Account | null> {
     const row = this.database
       .prepare("SELECT * FROM accounts WHERE owner_id = ? AND account_id = ?")

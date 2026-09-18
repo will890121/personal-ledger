@@ -6,12 +6,14 @@ import { createDraft } from "../application/create-draft.js";
 import { listRecent } from "../application/list-recent.js";
 import type { ConfirmedTransaction } from "../domain/ledger.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
+import type { ReferenceRepository } from "../ports/reference-repository.js";
 import { formatPreview } from "./format-preview.js";
 
 export interface LedgerBotDependencies {
   readonly token: string;
   readonly ownerId: string;
   readonly repository: LedgerRepository;
+  readonly referenceRepository: ReferenceRepository;
   readonly generateId: () => string;
   readonly now: () => Date;
   readonly today: () => string;
@@ -82,6 +84,7 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       },
       {
         repository: dependencies.repository,
+        referenceRepository: dependencies.referenceRepository,
         generateId: dependencies.generateId,
       },
     );

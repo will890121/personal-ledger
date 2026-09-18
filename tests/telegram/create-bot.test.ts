@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { createLedgerBot } from "../../src/telegram/create-bot.js";
 import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
+import { FakeReferenceRepository } from "../support/fake-reference-repository.js";
 
 interface ApiCall {
   readonly method: string;
@@ -24,6 +25,7 @@ function createHarness() {
     token: "123456:test-token",
     ownerId: "123",
     repository,
+    referenceRepository: new FakeReferenceRepository(),
     generateId: () => `id-${String(++nextId)}`,
     now: () => new Date("2026-09-18T01:00:00.000Z"),
     today: () => "2026-09-18",

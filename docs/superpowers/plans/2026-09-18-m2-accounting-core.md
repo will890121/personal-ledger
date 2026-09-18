@@ -573,19 +573,19 @@ git commit -m "feat: parse deterministic accounting flows"
 - `confirmDraft` 同時建立 transaction 與 creation audit
 - 產出：查詢 reference candidates 與退款目標的 application functions
 
-- [ ] **步驟 1：先寫 application orchestration 測試**
+- [x] **步驟 1：先寫 application orchestration 測試**
 
 驗證相同 Telegram update 仍只建立一個 InputEvent；reference repository 回傳兩個同名帳戶時不保存 draft；合法 draft 保存 ID 而非顯示名稱。
 
-- [ ] **步驟 2：先寫 confirm audit 與退款目標測試**
+- [x] **步驟 2：先寫 confirm audit 與退款目標測試**
 
 確認建立 transaction creation audit；退款候選只包含同 owner、未刪除、purpose=expense 的交易，依日期近、商家相同、金額相同排序。
 
-- [ ] **步驟 3：實作 reference snapshot 與 services**
+- [x] **步驟 3：實作 reference snapshot 與 services**
 
 `createDraft` dependencies 增加 `referenceRepository`。Snapshot 只包含有效資料及 parser 所需欄位，不讓 parser 存取 database。
 
-- [ ] **步驟 4：執行 application 測試**
+- [x] **步驟 4：執行 application 測試**
 
 ```bash
 pnpm test:run tests/application
@@ -593,7 +593,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 5：提交 application integration**
+- [x] **步驟 5：提交 application integration**
 
 ```bash
 git add src/application tests/application

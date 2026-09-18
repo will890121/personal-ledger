@@ -51,6 +51,7 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       token: config.telegramBotToken,
       ownerId: config.ownerId,
       repository,
+      referenceRepository,
       generateId: randomUUID,
       now: () => new Date(),
       today: () => dateInTimezone(new Date(), config.timezone),
