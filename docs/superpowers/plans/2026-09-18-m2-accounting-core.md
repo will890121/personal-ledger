@@ -373,11 +373,11 @@ git commit -m "feat: persist accounting reference data"
 - 產出：`getTransaction(ownerId, transactionId)`、`updateTransaction(command)`、`softDeleteTransaction(command)`
 - 產出：`linkTransaction(command)`、`unlinkTransaction(command)`、`listAuditEvents(ownerId, transactionId)`
 
-- [ ] **步驟 1：先寫建立交易與 AuditEvent 原子性測試**
+- [x] **步驟 1：先寫建立交易與 AuditEvent 原子性測試**
 
 確認 draft 後必須同時存在 transaction、allocations 與一筆 `transaction_created` audit。以 trigger 人為讓 audit insert 失敗時，三者都不得寫入。
 
-- [ ] **步驟 2：先寫更新與刪除失敗測試**
+- [x] **步驟 2：先寫更新與刪除失敗測試**
 
 ```ts
 await repository.updateTransaction({
@@ -398,17 +398,17 @@ expect(await repository.listAuditEvents("owner-1", transactionId)).toMatchObject
 
 另一 owner、過期 `expectedUpdatedAt`、已刪除交易、重複刪除都必須回傳明確 domain error 且不新增 audit。
 
-- [ ] **步驟 3：實作正規化 row mapper 與原子 mutation**
+- [x] **步驟 3：實作正規化 row mapper 與原子 mutation**
 
 停止從 transaction JSON 還原正式交易；由 transactions、allocations、tags、links 正規化資料組裝 aggregate。draft 仍可使用 JSON。
 
 更新配置使用 delete-and-insert，但只在同一 immediate transaction 中進行。使用 `updated_at = expectedUpdatedAt` optimistic check 防止 stale mutation。
 
-- [ ] **步驟 4：先寫退款關聯測試**
+- [x] **步驟 4：先寫退款關聯測試**
 
 驗證 `refund_of` 只能從 refund 指向同 owner、未刪除的 expense；允許多筆 refund 指向同一原交易；解除關聯產生 `transaction_unlinked` audit。
 
-- [ ] **步驟 5：實作 application mutation services**
+- [x] **步驟 5：實作 application mutation services**
 
 ```ts
 export async function updateConfirmedTransaction(
@@ -424,7 +424,7 @@ export async function softDeleteConfirmedTransaction(
 
 服務先記錄不可變 InputEvent，再呼叫 repository mutation。repository 以 owner scope 驗證 ownership。
 
-- [ ] **步驟 6：執行 ledger 與 application 測試**
+- [x] **步驟 6：執行 ledger 與 application 測試**
 
 ```bash
 pnpm test:run tests/db/sqlite-ledger-repository.test.ts tests/application
@@ -432,7 +432,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 7：提交正式帳本異動能力**
+- [x] **步驟 7：提交正式帳本異動能力**
 
 ```bash
 git add src/ports/ledger-repository.ts src/db/sqlite-ledger-repository.ts src/application tests/db/sqlite-ledger-repository.test.ts tests/application

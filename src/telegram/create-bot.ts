@@ -55,6 +55,7 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       dependencies.repository,
       draftId,
       dependencies.now().toISOString(),
+      dependencies.generateId(),
     );
     await context.answerCallbackQuery({ text: "已確認" });
     await context.editMessageText(
