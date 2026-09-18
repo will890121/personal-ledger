@@ -17,6 +17,9 @@ interface DraftRow {
 
 interface EventRow {
   event_id: string;
+  source_type: string;
+  source_ref: string;
+  raw_text: string;
 }
 
 interface TransactionRow {
@@ -37,8 +40,9 @@ interface AllocationRow {
   purpose: Allocation["purpose"];
   amount: string;
   currency: "TWD";
-  category: string;
-  subcategory: string | null;
+  category_id: string;
+  category_snapshot: string;
+  subcategory_snapshot: string | null;
 }
 
 export class SqliteLedgerRepository implements LedgerRepository {
@@ -125,13 +129,24 @@ export class SqliteLedgerRepository implements LedgerRepository {
         throw new Error("cancelled draft cannot be confirmed");
       }
 
+      const sourceEvent = this.database
+        .prepare(
+          `SELECT event_id, source_type, source_ref, raw_text
+           FROM input_events WHERE event_id = ?`,
+        )
+        .get(draft.sourceEventId) as EventRow | undefined;
+      if (!sourceEvent) {
+        throw new Error("source event not found");
+      }
+
       const transactionId = randomUUID();
       this.database
         .prepare(
           `INSERT INTO transactions (
             transaction_id, draft_id, owner_id, request_id, source_event_id,
-            occurred_date, amount, currency, status, confirmed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+            source_type, source_ref, occurred_date, amount, currency,
+            raw_input_snapshot, status, confirmed_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
         )
         .run(
           transactionId,
@@ -139,19 +154,29 @@ export class SqliteLedgerRepository implements LedgerRepository {
           draft.ownerId,
           draft.requestId,
           draft.sourceEventId,
+          sourceEvent.source_type,
+          sourceEvent.source_ref,
           draft.occurredDate,
           draft.amount.amount,
           draft.amount.currency,
+          sourceEvent.raw_text.slice(0, 4_096),
+          confirmedAt,
+          confirmedAt,
           confirmedAt,
         );
 
       const insertAllocation = this.database.prepare(
         `INSERT INTO allocations (
           allocation_id, transaction_id, funds_effect, purpose,
-          amount, currency, category, subcategory
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          amount, currency, category_id, category_snapshot, subcategory_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const allocation of draft.allocations) {
+        const categoryId = this.ensureLegacyCategory(
+          draft.ownerId,
+          allocation.category,
+          allocation.subcategory,
+        );
         insertAllocation.run(
           allocation.allocationId,
           transactionId,
@@ -159,6 +184,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
           allocation.purpose,
           allocation.amount.amount,
           allocation.amount.currency,
+          categoryId,
           allocation.category,
           allocation.subcategory ?? null,
         );
@@ -225,6 +251,42 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return row ? this.toConfirmedTransaction(row) : null;
   }
 
+  private ensureLegacyCategory(
+    ownerId: string,
+    category: string,
+    subcategory: string | undefined,
+  ): string {
+    const rootId = `m2:${ownerId}:expense`;
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO categories (
+          category_id, owner_id, key, name, kind, depth
+        ) VALUES (?, ?, 'expense', '支出', 'expense', 1)`,
+      )
+      .run(rootId, ownerId);
+
+    const isLunch =
+      ["food", "餐飲"].includes(category) &&
+      subcategory !== undefined &&
+      ["meal", "午餐"].includes(subcategory);
+    const suffix = Buffer.from(`${category}\u0000${subcategory ?? ""}`)
+      .toString("hex")
+      .toLowerCase();
+    const categoryId = isLunch
+      ? `m2:${ownerId}:expense_dining_lunch`
+      : `legacy:${ownerId}:${suffix}`;
+    const key = isLunch ? "expense_dining_lunch" : `legacy_${suffix}`;
+    const name = subcategory ? `${category}／${subcategory}` : category;
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO categories (
+          category_id, owner_id, key, name, kind, parent_id, depth
+        ) VALUES (?, ?, ?, ?, 'expense', ?, 2)`,
+      )
+      .run(categoryId, ownerId, key, name, rootId);
+    return categoryId;
+  }
+
   private toConfirmedTransaction(row: TransactionRow): ConfirmedTransaction {
     const allocations = this.database
       .prepare("SELECT * FROM allocations WHERE transaction_id = ? ORDER BY rowid")
@@ -243,8 +305,11 @@ export class SqliteLedgerRepository implements LedgerRepository {
         fundsEffect: allocation.funds_effect,
         purpose: allocation.purpose,
         amount: { amount: allocation.amount, currency: allocation.currency },
-        category: allocation.category,
-        ...(allocation.subcategory ? { subcategory: allocation.subcategory } : {}),
+        categoryId: allocation.category_id,
+        category: allocation.category_snapshot,
+        ...(allocation.subcategory_snapshot
+          ? { subcategory: allocation.subcategory_snapshot }
+          : {}),
       })),
       confirmedAt: row.confirmed_at,
       status: "confirmed",

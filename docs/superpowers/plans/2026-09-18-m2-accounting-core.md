@@ -214,7 +214,7 @@ git commit -m "feat: define m2 accounting domain model"
 - 修改：`migrate(database: Database.Database): void`，依版本順序套用所有 migration
 - 產出：schema version 2 與 M1 compatibility fixture
 
-- [ ] **步驟 1：建立含真實 M1 資料的 fixture helper**
+- [x] **步驟 1：建立含真實 M1 資料的 fixture helper**
 
 ```ts
 export function seedM1Ledger(database: Database.Database): {
@@ -227,7 +227,7 @@ export function seedM1Ledger(database: Database.Database): {
 }
 ```
 
-- [ ] **步驟 2：先寫 migration 失敗測試**
+- [x] **步驟 2：先寫 migration 失敗測試**
 
 測試必須驗證：
 
@@ -244,12 +244,12 @@ expect(database.pragma("foreign_key_check")).toEqual([]);
 
 再次呼叫 `migrate(database)` 後，所有 table row counts 必須不變。
 
-- [ ] **步驟 3：執行測試並確認缺少 version 2 而失敗**
+- [x] **步驟 3：執行測試並確認缺少 version 2 而失敗**
 
 執行：`pnpm test:run tests/db/migrate-accounting-core.test.ts`  
 預期：FAIL，schema version 只有 1。
 
-- [ ] **步驟 4：建立 version 2 schema**
+- [x] **步驟 4：建立 version 2 schema**
 
 SQL 建立：
 
@@ -260,7 +260,7 @@ SQL 建立：
 
 以 rename-copy-drop 方式重建 M1 tables。先建立 canonical 餐飲／午餐 category，再將 `food / meal` 映射至其 ID；其他舊分類依 normalized key 建立 owner-scoped legacy category。未完成 draft 改為 `archived`，但保留 JSON。
 
-- [ ] **步驟 5：將 migrate 改為有序 registry**
+- [x] **步驟 5：將 migrate 改為有序 registry**
 
 ```ts
 const migrations = [
@@ -271,7 +271,7 @@ const migrations = [
 
 每一版使用 immediate transaction，成功後才寫 `schema_migrations`。套用所有版本後執行 `foreign_key_check`，若有資料則拋錯並停止啟動。
 
-- [ ] **步驟 6：更新 build 資產測試並執行 DB 檢查**
+- [x] **步驟 6：更新 build 資產測試並執行 DB 檢查**
 
 現有 build glob 已複製所有 `.sql`，新增 assertion 驗證 `dist/src/db/migrations/0002_accounting_core.sql` 存在。
 
@@ -283,7 +283,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 7：提交 migration**
+- [x] **步驟 7：提交 migration**
 
 ```bash
 git add src/db/migrate.ts src/db/migrations/0002_accounting_core.sql tests/db/migrate-accounting-core.test.ts tests/fixtures/m1-ledger.ts tests/startup.test.ts

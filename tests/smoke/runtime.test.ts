@@ -64,7 +64,7 @@ describe("runtime composition", () => {
       await expect(runtime.repository.getDraft("draft-1")).resolves.toEqual(draft);
       expect(
         runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-      ).toEqual([{ version: 1 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }]);
     } finally {
       runtime.close();
     }
