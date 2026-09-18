@@ -44,3 +44,7 @@ docker compose up --build
 ```
 
 The named `ledger-data` volume stores `/app/data/personal-ledger.sqlite`. Telegram credentials stay in the local `.env` file and are injected by Compose; they are never copied into the image.
+
+## Acceptance
+
+Automated and manual M1 evidence is recorded in [`docs/quality/m1-acceptance.md`](docs/quality/m1-acceptance.md). M1 is complete only after every manual Telegram item is checked and the evidence is committed.
