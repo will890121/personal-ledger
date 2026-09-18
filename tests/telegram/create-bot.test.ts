@@ -27,6 +27,21 @@ function createHarness() {
     generateId: () => `id-${String(++nextId)}`,
     now: () => new Date("2026-09-18T01:00:00.000Z"),
     today: () => "2026-09-18",
+    botInfo: {
+      id: 1,
+      is_bot: true,
+      first_name: "Ledger Bot",
+      username: "ledger_bot",
+      can_join_groups: false,
+      can_read_all_group_messages: false,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+      can_manage_bots: false,
+      supports_join_request_queries: false,
+    },
   });
   const capture: Transformer = (_previous, method, payload) => {
     calls.push({ method, payload });

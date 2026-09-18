@@ -1,4 +1,5 @@
 import { Bot } from "grammy";
+import type { UserFromGetMe } from "grammy/types";
 
 import { cancelDraft, confirmDraft } from "../application/confirm-draft.js";
 import { createDraft } from "../application/create-draft.js";
@@ -14,6 +15,7 @@ export interface LedgerBotDependencies {
   readonly generateId: () => string;
   readonly now: () => Date;
   readonly today: () => string;
+  readonly botInfo?: UserFromGetMe;
 }
 
 function formatRecent(transactions: readonly ConfirmedTransaction[]): string {
@@ -29,23 +31,9 @@ function formatRecent(transactions: readonly ConfirmedTransaction[]): string {
 }
 
 export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
-  const bot = new Bot(dependencies.token, {
-    botInfo: {
-      id: 1,
-      is_bot: true,
-      first_name: "Ledger Bot",
-      username: "ledger_bot",
-      can_join_groups: false,
-      can_read_all_group_messages: false,
-      supports_inline_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-      can_manage_bots: false,
-      supports_join_request_queries: false,
-    },
-  });
+  const bot = dependencies.botInfo
+    ? new Bot(dependencies.token, { botInfo: dependencies.botInfo })
+    : new Bot(dependencies.token);
 
   bot.use(async (context, next) => {
     const isOwner = context.from && String(context.from.id) === dependencies.ownerId;

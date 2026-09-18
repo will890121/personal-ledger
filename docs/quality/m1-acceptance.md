@@ -17,7 +17,7 @@ Status: passed
 - Production build: passed, including packaged SQLite migration
 - Compose configuration: passed with non-secret test values
 - Docker image build: passed
-- Docker image ID: `sha256:21d4bc250c17598430259018fffec601b82ab33be61987aa3d89e3897bea6642`
+- Docker image ID: `sha256:dff8127dc450a3675cf44134ba3e3dcaeba499228c874ed0ce4586fb4e6d043e`
 - Container startup check: passed as the non-root runtime user without Telegram polling
 
 ## Manual Telegram Acceptance
