@@ -12,12 +12,14 @@ import { openDatabase } from "./db/database.js";
 import { migrate } from "./db/migrate.js";
 import { SqliteLedgerRepository } from "./db/sqlite-ledger-repository.js";
 import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
+import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
 import { createLedgerBot } from "./telegram/create-bot.js";
 
 export interface Runtime {
   readonly database: Database.Database;
   readonly repository: SqliteLedgerRepository;
   readonly referenceRepository: SqliteReferenceRepository;
+  readonly summaryRepository: SqliteSummaryRepository;
   readonly bot: Bot;
   readonly close: () => void;
 }
@@ -47,11 +49,13 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
     const referenceRepository = new SqliteReferenceRepository(database);
     await bootstrapReferenceData(referenceRepository, config.ownerId);
     const repository = new SqliteLedgerRepository(database);
+    const summaryRepository = new SqliteSummaryRepository(database);
     const bot = createLedgerBot({
       token: config.telegramBotToken,
       ownerId: config.ownerId,
       repository,
       referenceRepository,
+      summaryRepository,
       generateId: randomUUID,
       now: () => new Date(),
       today: () => dateInTimezone(new Date(), config.timezone),
@@ -61,6 +65,7 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       database,
       repository,
       referenceRepository,
+      summaryRepository,
       bot,
       close: () => database.close(),
     };

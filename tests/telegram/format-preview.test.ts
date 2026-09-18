@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { formatPreview } from "../../src/telegram/format-preview.js";
 import type { TransactionDraft } from "../../src/domain/ledger.js";
 
+const baseAllocation = {
+  allocationId: "allocation-1",
+  fundsEffect: "outflow" as const,
+  purpose: "expense" as const,
+  amount: { amount: "120", currency: "TWD" as const },
+  category: "餐飲",
+  subcategory: "午餐",
+};
+
 const draft: TransactionDraft = {
   draftId: "draft-1",
   ownerId: "123",
@@ -10,16 +19,7 @@ const draft: TransactionDraft = {
   sourceEventId: "event-1",
   occurredDate: "2026-09-18",
   amount: { amount: "120", currency: "TWD" },
-  allocations: [
-    {
-      allocationId: "allocation-1",
-      fundsEffect: "outflow",
-      purpose: "expense",
-      amount: { amount: "120", currency: "TWD" },
-      category: "餐飲",
-      subcategory: "午餐",
-    },
-  ],
+  allocations: [baseAllocation],
   status: "awaiting_confirmation",
 };
 
@@ -37,5 +37,38 @@ describe("formatPreview", () => {
         { text: "取消", callback_data: "cancel:draft-1" },
       ],
     ]);
+  });
+
+  it("shows every allocation and the credit-card cash effect", () => {
+    const preview = formatPreview({
+      ...draft,
+      amount: { amount: "1015", currency: "TWD" },
+      allocations: [
+        {
+          ...baseAllocation,
+          amount: { amount: "1000", currency: "TWD" },
+          fundsEffect: "internal",
+          purpose: "transfer",
+          category: "轉帳",
+          subcategory: undefined,
+        },
+        {
+          ...baseAllocation,
+          allocationId: "fee",
+          amount: { amount: "15", currency: "TWD" },
+          purpose: "fee",
+          category: "金融費用",
+          subcategory: undefined,
+        },
+      ],
+    });
+    expect(preview.text).toContain("配置 1：轉帳 · 內部移轉");
+    expect(preview.text).toContain("配置 2：手續費 · 資金流出");
+
+    const credit = formatPreview({
+      ...draft,
+      allocations: [{ ...baseAllocation, fundsEffect: "none" }],
+    });
+    expect(credit.text).toContain("不影響當下可動用資金");
   });
 });

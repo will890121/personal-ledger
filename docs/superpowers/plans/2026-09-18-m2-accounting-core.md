@@ -615,23 +615,23 @@ git commit -m "feat: orchestrate accounting draft workflows"
 - 新增 `delete:<transactionId>`、`refund:<transactionId>` callbacks
 - 預覽完整顯示每筆 allocation 的 funds effect、purpose、category 與 amount
 
-- [ ] **步驟 1：先寫完整預覽失敗測試**
+- [x] **步驟 1：先寫完整預覽失敗測試**
 
 轉帳加手續費預覽必須分兩列顯示，信用卡支出明確標示「不影響當下可動用資金」，退款顯示目標 transaction 的安全摘要，不顯示原始輸入。
 
-- [ ] **步驟 2：先寫 `/today` 與 `/month` handler 測試**
+- [x] **步驟 2：先寫 `/today` 與 `/month` handler 測試**
 
 驗證 owner/private gate、正確日期範圍、雙口徑數值、負數淨支出、空帳本及分類穩定排序。
 
-- [ ] **步驟 3：先寫 mutation callback 測試**
+- [x] **步驟 3：先寫 mutation callback 測試**
 
 刪除 callback 建立新的 InputEvent 並軟刪除；重複 callback 不產生第二次 audit；另一 owner 與群組 callback 無回覆。修改流程使用明確欄位 callback，不實作自由文字追問。
 
-- [ ] **步驟 4：實作 formatter 與 handlers**
+- [x] **步驟 4：實作 formatter 與 handlers**
 
 Callback data 只放 action 與 opaque ID，不放金額、分類、owner ID 或原文。所有 repository error 映射為固定安全訊息，詳細錯誤只以不含資料的 error code 記錄。
 
-- [ ] **步驟 5：執行 Telegram 與 application 回歸**
+- [x] **步驟 5：執行 Telegram 與 application 回歸**
 
 ```bash
 pnpm test:run tests/telegram tests/application
@@ -639,7 +639,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 6：提交 Telegram 能力**
+- [x] **步驟 6：提交 Telegram 能力**
 
 ```bash
 git add src/telegram tests/telegram

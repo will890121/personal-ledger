@@ -4,16 +4,21 @@ import type { UserFromGetMe } from "grammy/types";
 import { cancelDraft, confirmDraft } from "../application/confirm-draft.js";
 import { createDraft } from "../application/create-draft.js";
 import { listRecent } from "../application/list-recent.js";
+import { getMonthSummary, getTodaySummary } from "../application/ledger-summary.js";
+import { softDeleteConfirmedTransaction } from "../application/mutate-transaction.js";
 import type { ConfirmedTransaction } from "../domain/ledger.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 import type { ReferenceRepository } from "../ports/reference-repository.js";
+import type { SummaryRepository } from "../ports/summary-repository.js";
 import { formatPreview } from "./format-preview.js";
+import { formatSummary } from "./format-summary.js";
 
 export interface LedgerBotDependencies {
   readonly token: string;
   readonly ownerId: string;
   readonly repository: LedgerRepository;
   readonly referenceRepository: ReferenceRepository;
+  readonly summaryRepository: SummaryRepository;
   readonly generateId: () => string;
   readonly now: () => Date;
   readonly today: () => string;
@@ -49,6 +54,80 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
   bot.command("recent", async (context) => {
     const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
     await context.reply(formatRecent(transactions));
+  });
+
+  bot.command("today", async (context) => {
+    const summary = await getTodaySummary(dependencies.ownerId, {
+      repository: dependencies.summaryRepository,
+      today: dependencies.today,
+    });
+    await context.reply(formatSummary("今日摘要", summary));
+  });
+
+  bot.command("month", async (context) => {
+    const summary = await getMonthSummary(dependencies.ownerId, {
+      repository: dependencies.summaryRepository,
+      today: dependencies.today,
+    });
+    await context.reply(formatSummary("本月摘要", summary));
+  });
+
+  bot.callbackQuery(/^delete:/, async (context) => {
+    const transactionId = context.callbackQuery.data.slice("delete:".length);
+    const transaction = await dependencies.repository.getTransaction(
+      dependencies.ownerId,
+      transactionId,
+    );
+    if (!transaction || transaction.status === "deleted") {
+      await context.answerCallbackQuery({ text: "交易不存在或已刪除" });
+      return;
+    }
+    const changedAt = dependencies.now().toISOString();
+    const eventId = dependencies.generateId();
+    try {
+      await softDeleteConfirmedTransaction(
+        {
+          ownerId: dependencies.ownerId,
+          transactionId,
+          sourceEventId: eventId,
+          auditEventId: dependencies.generateId(),
+          expectedUpdatedAt: transaction.updatedAt ?? transaction.confirmedAt,
+          changedAt,
+        },
+        {
+          repository: dependencies.repository,
+          inputEvent: {
+            eventId,
+            ownerId: dependencies.ownerId,
+            telegramUpdateId: String(context.update.update_id),
+            sourceType: "telegram",
+            sourceRef: context.callbackQuery.id,
+            rawText: "delete transaction callback",
+            receivedAt: changedAt,
+          },
+        },
+      );
+      await context.answerCallbackQuery({ text: "交易已刪除" });
+      await context.editMessageText("交易已刪除。");
+    } catch {
+      await context.answerCallbackQuery({ text: "無法刪除交易" });
+    }
+  });
+
+  bot.callbackQuery(/^refund:/, async (context) => {
+    const transactionId = context.callbackQuery.data.slice("refund:".length);
+    const transaction = await dependencies.repository.getTransaction(
+      dependencies.ownerId,
+      transactionId,
+    );
+    if (!transaction || transaction.status === "deleted") {
+      await context.answerCallbackQuery({ text: "原交易不存在" });
+      return;
+    }
+    await context.answerCallbackQuery({ text: "已選取退款原交易" });
+    await context.reply(
+      `退款原交易：${transaction.occurredDate} · ${transaction.amount.currency} ${transaction.amount.amount}`,
+    );
   });
 
   bot.callbackQuery(/^confirm:/, async (context) => {

@@ -3,6 +3,7 @@ import type { Update } from "grammy/types";
 import { describe, expect, it } from "vitest";
 
 import { createLedgerBot } from "../../src/telegram/create-bot.js";
+import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
 import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
 import { FakeReferenceRepository } from "../support/fake-reference-repository.js";
 
@@ -26,6 +27,7 @@ function createHarness() {
     ownerId: "123",
     repository,
     referenceRepository: new FakeReferenceRepository(),
+    summaryRepository: { summarize: () => Promise.resolve(summarizeAllocations([])) },
     generateId: () => `id-${String(++nextId)}`,
     now: () => new Date("2026-09-18T01:00:00.000Z"),
     today: () => "2026-09-18",
@@ -144,5 +146,28 @@ describe("createLedgerBot", () => {
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/recent" }));
 
     expect(calls.map(getText)).toContain("尚無已確認交易。");
+  });
+
+  it("reports today and month summaries", async () => {
+    const { bot, calls } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/today" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 2, text: "/month" }));
+    expect(calls.map(getText)).toContainEqual(expect.stringContaining("今日摘要"));
+    expect(calls.map(getText)).toContainEqual(expect.stringContaining("本月摘要"));
+  });
+
+  it("records a callback event and soft-deletes only once", async () => {
+    const { bot, repository } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
+    const draftId = [...repository.drafts.keys()][0] ?? "";
+    await bot.handleUpdate(callbackUpdate(2, `confirm:${draftId}`));
+    const transaction = [...repository.transactions.values()][0];
+    expect(transaction).toBeDefined();
+    await bot.handleUpdate(callbackUpdate(3, `delete:${transaction?.transactionId ?? ""}`));
+    await bot.handleUpdate(callbackUpdate(3, `delete:${transaction?.transactionId ?? ""}`));
+    await expect(
+      repository.getTransaction("123", transaction?.transactionId ?? ""),
+    ).resolves.toMatchObject({ status: "deleted" });
+    expect(repository.inputEvents.size).toBe(2);
   });
 });
