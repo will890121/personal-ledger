@@ -92,6 +92,8 @@ describe("M2 accounting parser", () => {
       kind: "draft",
       draft: {
         amount: { amount: "18000" },
+        accountFromId: "taishin",
+        accountToId: "cathay-card",
         allocations: [{ fundsEffect: "outflow", purpose: "transfer" }],
       },
     });

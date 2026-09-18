@@ -149,9 +149,17 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
         ...category(context, "expense_financial_fee", "金融費用"),
       });
     }
+    const isCardPayment = text.includes("繳") && text.includes("卡");
+    const fromMarker = text.indexOf("從");
+    const sourceAccount = isCardPayment
+      ? accounts.find((item) => text.indexOf(item.name) > fromMarker)
+      : accounts[0];
+    const destinationAccount = isCardPayment
+      ? accounts.find((item) => item.accountId !== sourceAccount?.accountId)
+      : accounts[1];
     return draft(context, text, allocations, {
-      accountFromId: accounts[0]?.accountId,
-      accountToId: accounts[1]?.accountId,
+      accountFromId: sourceAccount?.accountId,
+      accountToId: destinationAccount?.accountId,
     });
   }
 
