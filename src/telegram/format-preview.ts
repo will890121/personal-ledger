@@ -1,5 +1,6 @@
 import type { InlineKeyboardMarkup } from "grammy/types";
 import type { TransactionDraft } from "../domain/ledger.js";
+import type { Account, Merchant } from "../domain/reference-data.js";
 
 const effectLabels: Record<TransactionDraft["allocations"][number]["fundsEffect"], string> = {
   inflow: "資金流入",
@@ -25,7 +26,13 @@ export interface DraftPreview {
   readonly replyMarkup: InlineKeyboardMarkup;
 }
 
-export function formatPreview(draft: TransactionDraft): DraftPreview {
+export function formatPreview(
+  draft: TransactionDraft,
+  references: {
+    readonly accounts?: readonly Account[];
+    readonly merchants?: readonly Merchant[];
+  } = {},
+): DraftPreview {
   if (draft.allocations.length === 0) throw new Error("draft must contain an allocation");
   const allocationLines = draft.allocations.flatMap((allocation, index) => {
     const category = allocation.subcategory
@@ -36,10 +43,17 @@ export function formatPreview(draft: TransactionDraft): DraftPreview {
       `分類：${category} · ${allocation.amount.currency} ${allocation.amount.amount}`,
     ];
   });
+  const account = references.accounts?.find((item) => item.accountId === draft.accountFromId);
+  const merchant = references.merchants?.find((item) => item.merchantId === draft.merchantId);
+  const referenceLines = [
+    ...(merchant ? [`商家：${merchant.name}`] : []),
+    ...(account ? [`帳戶：${account.name}`] : []),
+  ];
   return {
     text: [
       `日期：${draft.occurredDate}`,
       `總金額：${draft.amount.currency} ${draft.amount.amount}`,
+      ...referenceLines,
       ...allocationLines,
     ].join("\n"),
     replyMarkup: {

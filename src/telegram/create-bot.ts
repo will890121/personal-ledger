@@ -6,6 +6,7 @@ import { createDraft } from "../application/create-draft.js";
 import { listRecent } from "../application/list-recent.js";
 import { getMonthSummary, getTodaySummary } from "../application/ledger-summary.js";
 import { softDeleteConfirmedTransaction } from "../application/mutate-transaction.js";
+import { loadReferenceSnapshot } from "../application/reference-data.js";
 import type { ConfirmedTransaction } from "../domain/ledger.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 import type { ReferenceRepository } from "../ports/reference-repository.js";
@@ -181,7 +182,11 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       return;
     }
 
-    const preview = formatPreview(result.draft);
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const preview = formatPreview(result.draft, references);
     await context.reply(preview.text, { reply_markup: preview.replyMarkup });
   });
 

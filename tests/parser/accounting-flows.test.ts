@@ -67,7 +67,14 @@ describe("M2 accounting parser", () => {
         occurredDate: "2026-09-17",
         merchantId: "uber",
         accountFromId: "cathay-card",
-        allocations: [{ amount: { amount: "245" }, fundsEffect: "none", purpose: "expense" }],
+        allocations: [
+          {
+            amount: { amount: "245" },
+            fundsEffect: "none",
+            purpose: "expense",
+            category: "交通",
+          },
+        ],
       },
     });
   });

@@ -71,4 +71,25 @@ describe("formatPreview", () => {
     });
     expect(credit.text).toContain("不影響當下可動用資金");
   });
+
+  it("shows resolved merchant and account names", () => {
+    const preview = formatPreview(
+      { ...draft, merchantId: "uber", accountFromId: "card" },
+      {
+        merchants: [{ merchantId: "uber", ownerId: "123", name: "Uber", active: true }],
+        accounts: [
+          {
+            accountId: "card",
+            ownerId: "123",
+            name: "國泰卡",
+            type: "credit_card",
+            currency: "TWD",
+            active: true,
+          },
+        ],
+      },
+    );
+    expect(preview.text).toContain("商家：Uber");
+    expect(preview.text).toContain("帳戶：國泰卡");
+  });
 });

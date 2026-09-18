@@ -176,6 +176,10 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
     return { kind: "missing_fields", fields: ["category"] };
   }
   const account = accounts[0];
+  const merchant = merchants[0];
+  const isLunch = text.includes("午餐");
+  const categoryKey = merchant?.name === "Uber" ? "expense_transport" : "expense_dining_lunch";
+  const categoryFallback = merchant?.name === "Uber" ? "交通" : "餐飲";
   return draft(
     context,
     text,
@@ -185,13 +189,13 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
         fundsEffect: account?.type === "credit_card" ? "none" : "outflow",
         purpose: "expense",
         amount,
-        ...category(context, "expense_dining_lunch", "餐飲"),
-        subcategory: "午餐",
+        ...category(context, categoryKey, categoryFallback),
+        ...(isLunch ? { subcategory: "午餐" } : {}),
       },
     ],
     {
       ...(account ? { accountFromId: account.accountId } : {}),
-      ...(merchants[0] ? { merchantId: merchants[0].merchantId } : {}),
+      ...(merchant ? { merchantId: merchant.merchantId } : {}),
     },
   );
 }
