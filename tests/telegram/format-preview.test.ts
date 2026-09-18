@@ -92,4 +92,39 @@ describe("formatPreview", () => {
     expect(preview.text).toContain("商家：Uber");
     expect(preview.text).toContain("帳戶：國泰卡");
   });
+
+  it("shows both source and destination accounts for transfers", () => {
+    const preview = formatPreview(
+      {
+        ...draft,
+        accountFromId: "taishin",
+        accountToId: "cathay",
+        allocations: [
+          { ...baseAllocation, fundsEffect: "internal", purpose: "transfer", category: "轉帳" },
+        ],
+      },
+      {
+        accounts: [
+          {
+            accountId: "taishin",
+            ownerId: "123",
+            name: "台新",
+            type: "bank",
+            currency: "TWD",
+            active: true,
+          },
+          {
+            accountId: "cathay",
+            ownerId: "123",
+            name: "國泰",
+            type: "bank",
+            currency: "TWD",
+            active: true,
+          },
+        ],
+      },
+    );
+    expect(preview.text).toContain("來源帳戶：台新");
+    expect(preview.text).toContain("目的帳戶：國泰");
+  });
 });

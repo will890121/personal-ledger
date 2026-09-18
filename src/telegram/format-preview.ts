@@ -43,11 +43,14 @@ export function formatPreview(
       `分類：${category} · ${allocation.amount.currency} ${allocation.amount.amount}`,
     ];
   });
-  const account = references.accounts?.find((item) => item.accountId === draft.accountFromId);
+  const accountFrom = references.accounts?.find((item) => item.accountId === draft.accountFromId);
+  const accountTo = references.accounts?.find((item) => item.accountId === draft.accountToId);
   const merchant = references.merchants?.find((item) => item.merchantId === draft.merchantId);
+  const hasTransfer = draft.allocations.some((item) => item.purpose === "transfer");
   const referenceLines = [
     ...(merchant ? [`商家：${merchant.name}`] : []),
-    ...(account ? [`帳戶：${account.name}`] : []),
+    ...(accountFrom ? [`${hasTransfer ? "來源帳戶" : "帳戶"}：${accountFrom.name}`] : []),
+    ...(accountTo ? [`目的帳戶：${accountTo.name}`] : []),
   ];
   return {
     text: [
