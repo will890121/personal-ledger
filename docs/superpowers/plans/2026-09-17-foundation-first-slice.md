@@ -75,7 +75,7 @@
 - 產出：`loadConfig(env: NodeJS.ProcessEnv): AppConfig`
 - 產出：`test:run`、`typecheck`、`lint`、`dev`、`start` 指令
 
-- [ ] **步驟 1：初始化 Git 與 pnpm**
+- [x] **步驟 1：初始化 Git 與 pnpm**
 
 ```bash
 git init
@@ -84,14 +84,14 @@ pnpm init
 
 `package.json` 使用 ESM、Node 24，並定義所有品質檢查指令。
 
-- [ ] **步驟 2：安裝依賴**
+- [x] **步驟 2：安裝依賴**
 
 ```bash
 pnpm add grammy zod better-sqlite3 decimal.js
 pnpm add -D typescript tsx vitest eslint @eslint/js typescript-eslint @types/node @types/better-sqlite3
 ```
 
-- [ ] **步驟 3：先寫設定失敗測試**
+- [x] **步驟 3：先寫設定失敗測試**
 
 ```ts
 it("缺少 Telegram token 時拒絕啟動", () => {
@@ -113,20 +113,20 @@ it("載入第一階段預設值", () => {
 });
 ```
 
-- [ ] **步驟 4：執行測試並確認失敗**
+- [x] **步驟 4：執行測試並確認失敗**
 
 執行：`pnpm test:run tests/config.test.ts`  
 預期：因 `src/config.ts` 尚不存在而失敗。
 
-- [ ] **步驟 5：實作 Zod 設定驗證**
+- [x] **步驟 5：實作 Zod 設定驗證**
 
 驗證 `TELEGRAM_BOT_TOKEN`、數字格式的 `LEDGER_OWNER_ID`，並提供 database path、Asia/Taipei、TWD 預設值。錯誤訊息不得輸出 Token 值。
 
-- [ ] **步驟 6：建立 strict compiler、Vitest 與 ESLint 設定**
+- [x] **步驟 6：建立 strict compiler、Vitest 與 ESLint 設定**
 
 TypeScript 必須啟用 `strict`、`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`，使用 `NodeNext` 與 `ES2024`。
 
-- [ ] **步驟 7：執行品質檢查並提交**
+- [x] **步驟 7：執行品質檢查並提交**
 
 ```bash
 pnpm test:run
@@ -146,11 +146,11 @@ git commit -m "chore: initialize personal ledger service"
 - 產出：`MoneySchema`、`Money`、`money()`、`addMoney()`
 - 產出：`TransactionDraft`、`ConfirmedTransaction`、`Allocation`
 
-- [ ] **步驟 1：先寫 Money 失敗測試**
+- [x] **步驟 1：先寫 Money 失敗測試**
 
 測試 `00120.00` 正規化為 `120`、零與負數被拒絕，以及 `0.1 + 0.2 = 0.3`。
 
-- [ ] **步驟 2：實作 Decimal Money**
+- [x] **步驟 2：實作 Decimal Money**
 
 ```ts
 export function money(value: string, currency: "TWD"): Money {
@@ -162,15 +162,15 @@ export function money(value: string, currency: "TWD"): Money {
 }
 ```
 
-- [ ] **步驟 3：先寫 allocation invariant 測試**
+- [x] **步驟 3：先寫 allocation invariant 測試**
 
 建立總額 120、allocation 100 的 draft，預期 `TransactionDraftSchema` 拒絕並回報 allocation total 不一致。
 
-- [ ] **步驟 4：實作領域資料結構**
+- [x] **步驟 4：實作領域資料結構**
 
 建立 `FundsEffectSchema`、`PurposeSchema`、`AllocationSchema` 與 `TransactionDraftSchema`。所有 allocation 必須同幣別，且 Decimal 加總必須等於 transaction amount。
 
-- [ ] **步驟 5：執行品質檢查並提交**
+- [x] **步驟 5：執行品質檢查並提交**
 
 ```bash
 pnpm test:run tests/domain
@@ -194,7 +194,7 @@ git commit -m "feat: define ledger money and draft model"
 - 產出：`recordInputEvent()`、`saveDraft()`、`getDraft()`
 - 產出：`confirmDraft()`、`listRecent()`
 
-- [ ] **步驟 1：定義 LedgerRepository port**
+- [x] **步驟 1：定義 LedgerRepository port**
 
 ```ts
 export interface LedgerRepository {
@@ -211,19 +211,19 @@ export interface LedgerRepository {
 }
 ```
 
-- [ ] **步驟 2：先寫 in-memory SQLite 失敗測試**
+- [x] **步驟 2：先寫 in-memory SQLite 失敗測試**
 
 Migration 後儲存 draft，連續確認兩次，驗證 transaction ID 相同且資料庫只有一筆 transaction。
 
-- [ ] **步驟 3：建立 migration**
+- [x] **步驟 3：建立 migration**
 
 建立 `schema_migrations`、`input_events`、`drafts`、`transactions`、`allocations`。金額使用 TEXT；`telegram_update_id` 與 `request_id` 使用 UNIQUE；啟用 foreign keys。
 
-- [ ] **步驟 4：實作原子確認**
+- [x] **步驟 4：實作原子確認**
 
 `confirmDraft` 必須在單一 immediate transaction 中讀 draft、依 request ID 查重、新增 transaction 與 allocations、標記 draft confirmed，任何錯誤全部 rollback。
 
-- [ ] **步驟 5：執行測試並提交**
+- [x] **步驟 5：執行測試並提交**
 
 ```bash
 pnpm test:run tests/db tests/domain
@@ -240,19 +240,19 @@ git commit -m "feat: persist drafts and confirmed transactions"
 **介面：**
 - 產出：`parseTransaction(text, context): ParseResult`
 
-- [ ] **步驟 1：先寫 parser 失敗測試**
+- [x] **步驟 1：先寫 parser 失敗測試**
 
 驗證 `午餐 120` 產生今日、TWD 120、outflow、expense、餐飲／午餐草稿；`午餐` 回傳缺少 amount。
 
-- [ ] **步驟 2：確認測試失敗**
+- [x] **步驟 2：確認測試失敗**
 
 執行：`pnpm test:run tests/parser/rule-parser.test.ts`。
 
-- [ ] **步驟 3：實作窄範圍 parser**
+- [x] **步驟 3：實作窄範圍 parser**
 
 只辨識一個正十進位金額與 `午餐` 關鍵字。沒有金額或有多個候選時回傳 missing fields。本任務不得加入一般 NLP、多筆輸入、AI 或猜測分類。
 
-- [ ] **步驟 4：執行測試並提交**
+- [x] **步驟 4：執行測試並提交**
 
 ```bash
 pnpm test:run tests/parser tests/domain
@@ -269,23 +269,23 @@ git commit -m "feat: parse first deterministic expense input"
 - 建立：`tests/support/fake-ledger-repository.ts`
 - 測試：`tests/application/*.test.ts`
 
-- [ ] **步驟 1：建立測試用儲存庫**
+- [x] **步驟 1：建立測試用儲存庫**
 
 Fake 必須實作完整 LedgerRepository contract，並強制 request ID 冪等。
 
-- [ ] **步驟 2：先寫 create-draft 失敗測試**
+- [x] **步驟 2：先寫 create-draft 失敗測試**
 
 驗證 command 先建立 InputEvent，再儲存 awaiting-confirmation draft。相同 Telegram update ID 重送不得建立第二筆 draft。
 
-- [ ] **步驟 3：實作 createDraft**
+- [x] **步驟 3：實作 createDraft**
 
 流程固定為保存 InputEvent、處理 duplicate、呼叫 parser、保存合法 draft、回傳 typed result。缺少欄位不得建立正式 transaction。
 
-- [ ] **步驟 4：實作 confirmDraft 與 listRecent**
+- [x] **步驟 4：實作 confirmDraft 與 listRecent**
 
 確認服務只委派儲存庫的原子操作。最近交易預設 10 筆、最多 50 筆，依確認時間由新到舊排序。
 
-- [ ] **步驟 5：執行測試並提交**
+- [x] **步驟 5：執行測試並提交**
 
 ```bash
 pnpm test:run tests/application
@@ -299,23 +299,23 @@ git commit -m "feat: add draft confirmation application flow"
 - 建立：`src/telegram/format-preview.ts`、`src/telegram/create-bot.ts`
 - 測試：`tests/telegram/format-preview.test.ts`、`tests/telegram/create-bot.test.ts`
 
-- [ ] **步驟 1：先寫 preview 失敗測試**
+- [x] **步驟 1：先寫 preview 失敗測試**
 
 預覽必須包含日期、支出、TWD 120、餐飲／午餐，以及確認與取消按鈕。
 
-- [ ] **步驟 2：實作 formatter**
+- [x] **步驟 2：實作 formatter**
 
 只使用已驗證的領域值，不在 callback data 或一般日誌放入原始輸入。
 
-- [ ] **步驟 3：寫 handler 測試**
+- [x] **步驟 3：寫 handler 測試**
 
 涵蓋非白名單、群組、合法文字、`confirm:<draftId>`、`cancel:<draftId>`、重複確認及空的 `/recent`。
 
-- [ ] **步驟 4：實作 handlers**
+- [x] **步驟 4：實作 handlers**
 
 所有 handler 先驗證 private chat 與 owner ID。Callback 只保存 draft ID。已確認 draft 再次 callback 時，回傳既有 transaction。
 
-- [ ] **步驟 5：執行測試並提交**
+- [x] **步驟 5：執行測試並提交**
 
 ```bash
 pnpm test:run tests/telegram tests/application
@@ -330,19 +330,19 @@ git commit -m "feat: expose ledger flow through telegram"
 - 修改：`.env.example`、`README.md`
 - 測試：`tests/smoke/runtime.test.ts`
 
-- [ ] **步驟 1：先寫 composition smoke test**
+- [x] **步驟 1：先寫 composition smoke test**
 
 使用暫存 SQLite 路徑與測試 Token 建立相依關係，但不啟動長輪詢。驗證 migration 已執行且儲存庫可讀寫。
 
-- [ ] **步驟 2：實作 main composition**
+- [x] **步驟 2：實作 main composition**
 
 順序固定為載入設定、建立資料目錄、開啟 SQLite、執行 migration、建立儲存庫、服務與 Bot、註冊 SIGINT／SIGTERM、開始長輪詢。
 
-- [ ] **步驟 3：加入 Docker**
+- [x] **步驟 3：加入 Docker**
 
 使用 Node 24 LTS image、非 root user、`/app/data` volume 與 `restart: unless-stopped`。秘密資料只由環境變數注入。
 
-- [ ] **步驟 4：補 README 並完整驗證**
+- [x] **步驟 4：補 README 並完整驗證**
 
 ```bash
 pnpm test:run
@@ -352,7 +352,7 @@ docker compose config
 docker build -t personal-ledger:test .
 ```
 
-- [ ] **步驟 5：提交**
+- [x] **步驟 5：提交**
 
 ```bash
 git add src/main.ts Dockerfile compose.yaml .env.example README.md tests/smoke
@@ -365,11 +365,11 @@ git commit -m "feat: package first ledger bot vertical slice"
 - 建立：`docs/quality/m1-acceptance.md`
 - 修改：`README.md`
 
-- [ ] **步驟 1：建立 BotFather 開發 Bot 與本機 .env**
+- [x] **步驟 1：建立 BotFather 開發 Bot 與本機 .env**
 
 不得提交 `.env` 或 Token，只設定允許的 Telegram user ID。
 
-- [ ] **步驟 2：執行人工驗收**
+- [x] **步驟 2：執行人工驗收**
 
 ```text
 1. 未授權使用者無法取得財務資料。
@@ -382,7 +382,7 @@ git commit -m "feat: package first ledger bot vertical slice"
 8. transaction 可連回原始 InputEvent。
 ```
 
-- [ ] **步驟 3：執行最終自動驗證**
+- [x] **步驟 3：執行最終自動驗證**
 
 ```bash
 pnpm test:run
@@ -392,7 +392,7 @@ docker compose config
 docker build -t personal-ledger:m1 .
 ```
 
-- [ ] **步驟 4：記錄證據並提交**
+- [x] **步驟 4：記錄證據並提交**
 
 記錄工具版本、測試數量、image ID、驗收日期與結果，不得記錄 Token、chat ID、完整私人財務原文或本機絕對路徑。
 

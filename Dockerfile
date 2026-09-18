@@ -26,4 +26,5 @@ COPY --from=build --chown=ledger:ledger /app/node_modules ./node_modules
 COPY --from=build --chown=ledger:ledger /app/dist ./dist
 USER ledger
 VOLUME ["/app/data"]
+STOPSIGNAL SIGTERM
 CMD ["node", "--enable-source-maps", "dist/src/main.js"]

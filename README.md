@@ -1,6 +1,6 @@
 # Personal Ledger
 
-Ledger Bot is a Telegram-first personal finance service. M0 establishes the engineering baseline: TypeScript strict ESM, Vitest, ESLint, Docker, and configuration validation.
+Ledger Bot is a Telegram-first personal finance service. M1 accepts a deterministic expense such as `午餐 120`, previews it for confirmation, persists confirmed transactions in SQLite, and lists them with `/recent`.
 
 ## Requirements
 
@@ -23,10 +23,10 @@ Fill in `.env` locally. Do not commit real Telegram tokens or owner IDs.
 pnpm check
 ```
 
-From a fresh checkout, the M0 acceptance suite installs dependencies, runs all quality checks, and builds the Docker image with one command:
+From a fresh checkout, install dependencies and run the M1 verification suite:
 
 ```bash
-pnpm install --frozen-lockfile && pnpm verify:m0
+pnpm install --frozen-lockfile && pnpm verify:m1
 ```
 
 ## Development
@@ -35,4 +35,16 @@ pnpm install --frozen-lockfile && pnpm verify:m0
 pnpm dev
 ```
 
-M0 only validates configuration and startup wiring. The Telegram and SQLite transaction flow begins in M1.
+The bot uses long polling. Only the private Telegram user identified by `LEDGER_OWNER_ID` is allowed through the adapter; group and other-user updates are ignored. Stop the process with `SIGINT` or `SIGTERM` so the bot and SQLite connection close cleanly.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+The named `ledger-data` volume stores `/app/data/personal-ledger.sqlite`. Telegram credentials stay in the local `.env` file and are injected by Compose; they are never copied into the image.
+
+## Acceptance
+
+Automated and manual M1 evidence is recorded in [`docs/quality/m1-acceptance.md`](docs/quality/m1-acceptance.md). M1 is complete only after every manual Telegram item is checked and the evidence is committed.

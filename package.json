@@ -12,14 +12,15 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node --enable-source-maps dist/src/main.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/src/db/migrations && cp src/db/migrations/*.sql dist/src/db/migrations/",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm format:check && pnpm test:run && pnpm typecheck && pnpm lint && pnpm build",
-    "verify:m0": "pnpm check && docker compose config && docker build -t personal-ledger:m0 ."
+    "verify:m0": "pnpm check && docker compose config && docker build -t personal-ledger:m0 .",
+    "verify:m1": "pnpm check && docker compose config && docker build -t personal-ledger:m1 ."
   },
   "dependencies": {
     "better-sqlite3": "^12.4.1",

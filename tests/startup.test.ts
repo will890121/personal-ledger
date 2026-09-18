@@ -12,7 +12,7 @@ interface PackageJson {
 
 describe("production startup", () => {
   beforeAll(() => {
-    execFileSync(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], {
+    execFileSync("pnpm", ["build"], {
       cwd: projectRoot,
     });
   });
@@ -35,12 +35,16 @@ describe("production startup", () => {
         ...process.env,
         TELEGRAM_BOT_TOKEN: "test-token",
         LEDGER_OWNER_ID: "1",
+        DATABASE_PATH: ":memory:",
+        LEDGER_STARTUP_CHECK: "1",
       },
       shell: true,
     });
 
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Ledger Bot configuration loaded");
+    expect(result.stdout).toContain("Ledger Bot runtime ready");
+    expect(result.stdout).not.toContain("test-token");
+    expect(result.stdout).not.toContain("ownerId");
   });
 });
