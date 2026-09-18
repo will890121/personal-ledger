@@ -44,5 +44,7 @@ describe("production startup", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Ledger Bot runtime ready");
+    expect(result.stdout).not.toContain("test-token");
+    expect(result.stdout).not.toContain("ownerId");
   });
 });

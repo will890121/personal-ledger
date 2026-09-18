@@ -68,7 +68,6 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   const runtime = composeRuntime(config);
 
   console.info("Ledger Bot runtime ready", {
-    ownerId: config.ownerId,
     databasePath: config.databasePath,
     timezone: config.timezone,
     currency: config.currency,
