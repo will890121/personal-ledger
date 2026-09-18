@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { TransactionDraft } from "../../src/domain/ledger.js";
 import { composeRuntime } from "../../src/main.js";
+import { openDatabase } from "../../src/db/database.js";
+import { seedM1Ledger } from "../fixtures/m1-ledger.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -24,7 +26,7 @@ describe("runtime composition", () => {
       telegramBotToken: "test-token",
       ownerId: "123",
       databasePath: join(directory, "nested", "ledger.sqlite"),
-      timezone: "Asia/Taipei",
+      timezone: "Asia/Taipei" as const,
       currency: "TWD",
     });
 
@@ -73,6 +75,60 @@ describe("runtime composition", () => {
       ).toEqual([{ version: 1 }, { version: 2 }]);
     } finally {
       runtime.close();
+    }
+  });
+
+  it("upgrades an M1 database and exposes its transaction and summary", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "personal-ledger-m1-runtime-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "ledger.sqlite");
+    const legacyDatabase = openDatabase(databasePath);
+    seedM1Ledger(legacyDatabase);
+    legacyDatabase.close();
+
+    const config = {
+      telegramBotToken: "test-token",
+      ownerId: "owner-1",
+      databasePath,
+      timezone: "Asia/Taipei" as const,
+      currency: "TWD" as const,
+    };
+    const runtime = await composeRuntime(config);
+    let categoryCount = 0;
+    try {
+      await expect(
+        runtime.repository.getTransaction("owner-1", "m1-transaction"),
+      ).resolves.toMatchObject({
+        amount: { amount: "120" },
+        status: "confirmed",
+      });
+      await expect(
+        runtime.summaryRepository.summarize("owner-1", { from: "2026-09-18", to: "2026-09-18" }),
+      ).resolves.toMatchObject({
+        actualOutflow: { amount: "120" },
+        netPersonalExpense: { amount: "120" },
+      });
+      expect(
+        runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
+      ).toEqual([{ version: 1 }, { version: 2 }]);
+      categoryCount = (
+        runtime.database
+          .prepare("SELECT COUNT(*) AS count FROM categories WHERE owner_id = ?")
+          .get("owner-1") as { count: number }
+      ).count;
+    } finally {
+      runtime.close();
+    }
+
+    const restarted = await composeRuntime(config);
+    try {
+      expect(
+        restarted.database
+          .prepare("SELECT COUNT(*) AS count FROM categories WHERE owner_id = ?")
+          .get("owner-1"),
+      ).toEqual({ count: categoryCount });
+    } finally {
+      restarted.close();
     }
   });
 });

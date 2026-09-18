@@ -659,19 +659,19 @@ git commit -m "feat: expose m2 accounting workflows in telegram"
 - Runtime 組合 reference、ledger、summary repositories
 - M2 acceptance 文件記錄自動與人工證據，不含秘密及識別資訊
 
-- [ ] **步驟 1：擴充 runtime smoke test**
+- [x] **步驟 1：擴充 runtime smoke test**
 
 使用 M1 fixture database 啟動 composition，驗證自動升級至 version 2、bootstrap 冪等、原交易可讀、summary 正確，且不啟動 polling。
 
-- [ ] **步驟 2：更新 runtime composition**
+- [x] **步驟 2：更新 runtime composition**
 
 固定順序：載入設定、建立目錄、開 DB、套用 migration、bootstrap reference data、建立 repositories、建立 Bot。任何 migration 或 bootstrap 失敗都關閉 DB 並拒絕啟動。
 
-- [ ] **步驟 3：補 README 中文操作說明**
+- [x] **步驟 3：補 README 中文操作說明**
 
 記錄 M2 支援語句、`/today`、`/month`、修改／刪除限制、Docker 升級方式與 migration 前自行備份提醒。不得在文件放 token、owner ID 或本機絕對路徑。
 
-- [ ] **步驟 4：執行完整自動驗證**
+- [x] **步驟 4：執行完整自動驗證**
 
 ```bash
 pnpm check
