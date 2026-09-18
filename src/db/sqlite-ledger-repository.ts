@@ -189,6 +189,18 @@ export class SqliteLedgerRepository implements LedgerRepository {
         confirmed,
         confirmedAt,
       );
+      if (draft.refundTargetTransactionId) {
+        void this.linkTransaction({
+          linkId: `${transactionId}:refund-link`,
+          ownerId: draft.ownerId,
+          fromTransactionId: transactionId,
+          toTransactionId: draft.refundTargetTransactionId,
+          linkType: "refund_of",
+          sourceEventId: draft.sourceEventId,
+          auditEventId: `${auditEventId}:refund-link`,
+          changedAt: confirmedAt,
+        });
+      }
       return confirmed;
     });
     return Promise.resolve(execute.immediate());

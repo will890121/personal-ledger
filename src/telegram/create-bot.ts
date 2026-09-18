@@ -54,7 +54,21 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
 
   bot.command("recent", async (context) => {
     const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
-    await context.reply(formatRecent(transactions));
+    await context.reply(formatRecent(transactions), {
+      ...(transactions.length
+        ? {
+            reply_markup: {
+              inline_keyboard: transactions.map((transaction) => [
+                {
+                  text: `退款 ${transaction.amount.amount}`,
+                  callback_data: `refund:${transaction.transactionId}`,
+                },
+                { text: "刪除", callback_data: `delete:${transaction.transactionId}` },
+              ]),
+            },
+          }
+        : {}),
+    });
   });
 
   bot.command("today", async (context) => {
@@ -125,10 +139,56 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       await context.answerCallbackQuery({ text: "原交易不存在" });
       return;
     }
-    await context.answerCallbackQuery({ text: "已選取退款原交易" });
-    await context.reply(
-      `退款原交易：${transaction.occurredDate} · ${transaction.amount.currency} ${transaction.amount.amount}`,
+    const sourceEventId = dependencies.generateId();
+    const recorded = await dependencies.repository.recordInputEvent({
+      eventId: sourceEventId,
+      ownerId: dependencies.ownerId,
+      telegramUpdateId: String(context.update.update_id),
+      sourceType: "telegram",
+      sourceRef: context.callbackQuery.id,
+      rawText: "refund transaction callback",
+      receivedAt: dependencies.now().toISOString(),
+    });
+    if (!recorded.created) {
+      await context.answerCallbackQuery({ text: "退款操作已處理" });
+      return;
+    }
+    const originalAllocation = transaction.allocations.find((item) => item.purpose === "expense");
+    if (!originalAllocation) {
+      await context.answerCallbackQuery({ text: "此交易不可退款" });
+      return;
+    }
+    const draft = {
+      draftId: dependencies.generateId(),
+      ownerId: dependencies.ownerId,
+      requestId: dependencies.generateId(),
+      sourceEventId,
+      refundTargetTransactionId: transaction.transactionId,
+      occurredDate: dependencies.today(),
+      amount: transaction.amount,
+      allocations: [
+        {
+          allocationId: dependencies.generateId(),
+          fundsEffect: "inflow" as const,
+          purpose: "refund" as const,
+          amount: transaction.amount,
+          ...(originalAllocation.categoryId ? { categoryId: originalAllocation.categoryId } : {}),
+          category: originalAllocation.category,
+          ...(originalAllocation.subcategory
+            ? { subcategory: originalAllocation.subcategory }
+            : {}),
+        },
+      ],
+      status: "awaiting_confirmation" as const,
+    };
+    await dependencies.repository.saveDraft(draft);
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
     );
+    const preview = formatPreview(draft, { ...references, refundTarget: transaction });
+    await context.answerCallbackQuery({ text: "請確認退款" });
+    await context.reply(preview.text, { reply_markup: preview.replyMarkup });
   });
 
   bot.callbackQuery(/^confirm:/, async (context) => {

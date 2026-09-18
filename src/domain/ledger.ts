@@ -118,6 +118,7 @@ function validateAllocations(
 
 export const TransactionDraftSchema = LedgerEntrySchema.extend({
   draftId: z.string().min(1),
+  refundTargetTransactionId: z.string().min(1).optional(),
   status: z.enum([
     "parsing",
     "awaiting_input",

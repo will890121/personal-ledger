@@ -1,5 +1,5 @@
 import type { InlineKeyboardMarkup } from "grammy/types";
-import type { TransactionDraft } from "../domain/ledger.js";
+import type { ConfirmedTransaction, TransactionDraft } from "../domain/ledger.js";
 import type { Account, Merchant } from "../domain/reference-data.js";
 
 const effectLabels: Record<TransactionDraft["allocations"][number]["fundsEffect"], string> = {
@@ -31,6 +31,7 @@ export function formatPreview(
   references: {
     readonly accounts?: readonly Account[];
     readonly merchants?: readonly Merchant[];
+    readonly refundTarget?: ConfirmedTransaction;
   } = {},
 ): DraftPreview {
   if (draft.allocations.length === 0) throw new Error("draft must contain an allocation");
@@ -51,6 +52,11 @@ export function formatPreview(
     ...(merchant ? [`商家：${merchant.name}`] : []),
     ...(accountFrom ? [`${hasTransfer ? "來源帳戶" : "帳戶"}：${accountFrom.name}`] : []),
     ...(accountTo ? [`目的帳戶：${accountTo.name}`] : []),
+    ...(references.refundTarget
+      ? [
+          `退款原交易：${references.refundTarget.occurredDate} · ${references.refundTarget.amount.currency} ${references.refundTarget.amount.amount}`,
+        ]
+      : []),
   ];
   return {
     text: [

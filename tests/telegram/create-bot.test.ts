@@ -170,4 +170,26 @@ describe("createLedgerBot", () => {
     ).resolves.toMatchObject({ status: "deleted" });
     expect(repository.inputEvents.size).toBe(2);
   });
+
+  it("creates a confirmable refund draft from a recent transaction", async () => {
+    const { bot, calls, repository } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
+    const expenseDraftId = [...repository.drafts.keys()][0] ?? "";
+    await bot.handleUpdate(callbackUpdate(2, `confirm:${expenseDraftId}`));
+    const expense = [...repository.transactions.values()][0];
+    expect(expense).toBeDefined();
+
+    await bot.handleUpdate(messageUpdate({ updateId: 3, text: "/recent" }));
+    await bot.handleUpdate(callbackUpdate(4, `refund:${expense?.transactionId ?? ""}`));
+
+    const refundDraft = [...repository.drafts.values()].find(
+      (item) => item.refundTargetTransactionId === expense?.transactionId,
+    );
+    expect(refundDraft).toMatchObject({
+      amount: { amount: "120" },
+      allocations: [{ fundsEffect: "inflow", purpose: "refund" }],
+      status: "awaiting_confirmation",
+    });
+    expect(calls.map(getText)).toContainEqual(expect.stringContaining("退款原交易"));
+  });
 });
