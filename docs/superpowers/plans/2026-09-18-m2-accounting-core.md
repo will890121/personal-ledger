@@ -515,7 +515,7 @@ git commit -m "feat: calculate exact ledger summaries"
 - Context 新增：已啟用 account/category/merchant candidates
 - 產出：`missing_fields` 與 `ambiguous` issue paths，不進行對話追問
 
-- [ ] **步驟 1：先寫 AC parser table tests**
+- [x] **步驟 1：先寫 AC parser table tests**
 
 ```ts
 it.each([
@@ -530,20 +530,20 @@ it.each([
 });
 ```
 
-- [ ] **步驟 2：先寫歧義與未知參照測試**
+- [x] **步驟 2：先寫歧義與未知參照測試**
 
 兩個同名帳戶回傳 `ambiguous` 且列出 candidate IDs；未知信用卡、缺退款分類、多個未指定用途金額都不得建立 draft。
 
-- [ ] **步驟 3：執行測試並確認新形式失敗**
+- [x] **步驟 3：執行測試並確認新形式失敗**
 
 執行：`pnpm test:run tests/parser`  
 預期：M1 案例通過，新增 M2 案例失敗。
 
-- [ ] **步驟 4：以小型規則函式實作，不建立通用 NLP engine**
+- [x] **步驟 4：以小型規則函式實作，不建立通用 NLP engine**
 
 拆分 `parseAmountCandidates`、`parseRelativeDate`、`matchReferenceByName`、`classifyAccountingIntent`。規則順序為明確 transfer/fee、income、refund、card payment、card expense、ordinary expense。所有輸出最後通過 `TransactionDraftSchema`。
 
-- [ ] **步驟 5：執行 parser 與領域回歸**
+- [x] **步驟 5：執行 parser 與領域回歸**
 
 ```bash
 pnpm test:run tests/parser tests/domain
@@ -551,7 +551,7 @@ pnpm typecheck
 pnpm lint
 ```
 
-- [ ] **步驟 6：提交 parser**
+- [x] **步驟 6：提交 parser**
 
 ```bash
 git add src/parser/rule-parser.ts tests/parser

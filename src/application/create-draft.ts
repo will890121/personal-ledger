@@ -18,7 +18,7 @@ export interface CreateDraftDependencies {
 
 export type CreateDraftResult =
   | { readonly kind: "draft"; readonly draft: TransactionDraft }
-  | Extract<ParseResult, { kind: "missing_fields" }>
+  | Exclude<ParseResult, { kind: "draft" }>
   | { readonly kind: "duplicate"; readonly eventId: string };
 
 export async function createDraft(
@@ -49,7 +49,7 @@ export async function createDraft(
     today: command.occurredDate,
   });
 
-  if (parsed.kind === "missing_fields") {
+  if (parsed.kind !== "draft") {
     return parsed;
   }
 

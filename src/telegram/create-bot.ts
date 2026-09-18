@@ -94,6 +94,10 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       await context.reply("缺少必要欄位：金額。");
       return;
     }
+    if (result.kind === "ambiguous") {
+      await context.reply("找到多個符合的參照資料，請提供更完整的名稱。");
+      return;
+    }
 
     const preview = formatPreview(result.draft);
     await context.reply(preview.text, { reply_markup: preview.replyMarkup });
