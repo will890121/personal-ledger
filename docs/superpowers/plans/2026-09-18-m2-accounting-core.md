@@ -687,7 +687,7 @@ docker run --rm \
 
 預期：所有 tests、format、typecheck、lint、build、Compose 與 image startup check 通過。
 
-- [ ] **步驟 5：執行人工 Telegram 驗收**
+- [x] **步驟 5：執行人工 Telegram 驗收**
 
 依序驗證且不在文件記錄私人原文：
 
@@ -697,11 +697,11 @@ docker run --rm \
 4. 另一使用者與群組無法取得資料；
 5. container 重啟後 migration、交易、audit 與摘要仍正確。
 
-- [ ] **步驟 6：建立驗收證據並更新 roadmap**
+- [x] **步驟 6：建立驗收證據並更新 roadmap**
 
 `docs/quality/m2-acceptance.md` 記錄日期、工具版本、test 數量、image ID、各 AC 結果與資料升級結果。`docs/roadmap.md` 只將 M2 標記完成，不改變後續里程碑範圍。
 
-- [ ] **步驟 7：提交 M2 結案文件**
+- [x] **步驟 7：提交 M2 結案文件**
 
 ```bash
 git add src/main.ts tests/smoke/runtime.test.ts README.md docs/quality/m2-acceptance.md docs/roadmap.md

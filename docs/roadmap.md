@@ -61,6 +61,8 @@
 
 ### M2：帳務核心完整化
 
+狀態：已完成（2026-09-19）
+
 交付內容：
 
 - 完整 `funds_effect`、`purpose` 及 allocation 驗證。
