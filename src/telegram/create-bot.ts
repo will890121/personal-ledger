@@ -8,6 +8,7 @@ import { getMonthSummary, getTodaySummary } from "../application/ledger-summary.
 import { softDeleteConfirmedTransaction } from "../application/mutate-transaction.js";
 import { loadReferenceSnapshot } from "../application/reference-data.js";
 import type { ConfirmedTransaction } from "../domain/ledger.js";
+import type { ReferenceSnapshot } from "../application/reference-data.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 import type { ReferenceRepository } from "../ports/reference-repository.js";
 import type { SummaryRepository } from "../ports/summary-repository.js";
@@ -26,16 +27,61 @@ export interface LedgerBotDependencies {
   readonly botInfo?: UserFromGetMe;
 }
 
-function formatRecent(transactions: readonly ConfirmedTransaction[]): string {
+const recentPurposeLabels: Record<ConfirmedTransaction["allocations"][number]["purpose"], string> =
+  {
+    income: "收入",
+    expense: "支出",
+    transfer: "轉帳",
+    refund: "退款",
+    advance: "代墊",
+    advance_recovery: "代墊收回",
+    loan_out: "借出",
+    loan_in: "借入",
+    loan_repayment: "還款",
+    fee: "手續費",
+  };
+
+export function formatRecent(
+  transactions: readonly ConfirmedTransaction[],
+  references: Partial<ReferenceSnapshot> = {},
+): string {
   if (transactions.length === 0) {
     return "尚無已確認交易。";
   }
   return transactions
-    .map(
-      (transaction) =>
-        `${transaction.occurredDate} · ${transaction.amount.currency} ${transaction.amount.amount}`,
-    )
-    .join("\n");
+    .map((transaction, index) => {
+      const accountFrom = references.accounts?.find(
+        (item) => item.accountId === transaction.accountFromId,
+      );
+      const accountTo = references.accounts?.find(
+        (item) => item.accountId === transaction.accountToId,
+      );
+      const merchant = references.merchants?.find(
+        (item) => item.merchantId === transaction.merchantId,
+      );
+      const allocationSummary = transaction.allocations
+        .map((allocation) => {
+          const category = allocation.subcategory
+            ? `${allocation.category}／${allocation.subcategory}`
+            : allocation.category;
+          return `${recentPurposeLabels[allocation.purpose]}・${category} ${allocation.amount.currency} ${allocation.amount.amount}`;
+        })
+        .join("；");
+      const referenceSummary = [
+        ...(merchant ? [merchant.name] : []),
+        ...(accountFrom && accountTo
+          ? [`${accountFrom.name} → ${accountTo.name}`]
+          : accountFrom
+            ? [accountFrom.name]
+            : []),
+      ];
+      return [
+        `#${String(index + 1)} ${transaction.occurredDate} · ${transaction.amount.currency} ${transaction.amount.amount}`,
+        allocationSummary,
+        ...(referenceSummary.length ? [referenceSummary.join(" · ")] : []),
+      ].join("\n");
+    })
+    .join("\n\n");
 }
 
 export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
@@ -54,21 +100,28 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
 
   bot.command("recent", async (context) => {
     const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
-    await context.reply(formatRecent(transactions), {
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    await context.reply(formatRecent(transactions, references), {
       ...(transactions.length
         ? {
             reply_markup: {
               inline_keyboard: [
-                ...transactions.map((transaction) => [
+                ...transactions.map((transaction, index) => [
                   ...(transaction.allocations.some((item) => item.purpose === "expense")
                     ? [
                         {
-                          text: `退款 ${transaction.occurredDate.slice(5)} · ${transaction.amount.amount}`,
+                          text: `退款 #${String(index + 1)}`,
                           callback_data: `refund:${transaction.transactionId}`,
                         },
                       ]
                     : []),
-                  { text: "刪除", callback_data: `delete:${transaction.transactionId}` },
+                  {
+                    text: `刪除 #${String(index + 1)}`,
+                    callback_data: `delete:${transaction.transactionId}`,
+                  },
                 ]),
                 [{ text: "關閉清單", callback_data: "dismiss-recent" }],
               ],

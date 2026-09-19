@@ -2,7 +2,7 @@ import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 import { describe, expect, it } from "vitest";
 
-import { createLedgerBot } from "../../src/telegram/create-bot.js";
+import { createLedgerBot, formatRecent } from "../../src/telegram/create-bot.js";
 import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
 import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
 import { FakeReferenceRepository } from "../support/fake-reference-repository.js";
@@ -101,6 +101,64 @@ function callbackUpdate(updateId: number, data: string): Update {
 }
 
 describe("createLedgerBot", () => {
+  it("formats recent transactions with numbered accounting and reference details", () => {
+    expect(
+      formatRecent(
+        [
+          {
+            transactionId: "transaction-1",
+            draftId: "draft-1",
+            ownerId: "123",
+            requestId: "request-1",
+            sourceEventId: "event-1",
+            occurredDate: "2026-09-19",
+            amount: { amount: "1015", currency: "TWD" },
+            accountFromId: "taishin",
+            accountToId: "cathay",
+            allocations: [
+              {
+                allocationId: "transfer",
+                fundsEffect: "internal",
+                purpose: "transfer",
+                amount: { amount: "1000", currency: "TWD" },
+                category: "轉帳",
+              },
+              {
+                allocationId: "fee",
+                fundsEffect: "outflow",
+                purpose: "fee",
+                amount: { amount: "15", currency: "TWD" },
+                category: "金融費用",
+              },
+            ],
+            confirmedAt: "2026-09-19T00:00:00.000Z",
+            status: "confirmed",
+          },
+        ],
+        {
+          accounts: [
+            {
+              accountId: "taishin",
+              ownerId: "123",
+              name: "台新",
+              type: "bank",
+              currency: "TWD",
+              active: true,
+            },
+            {
+              accountId: "cathay",
+              ownerId: "123",
+              name: "國泰",
+              type: "bank",
+              currency: "TWD",
+              active: true,
+            },
+          ],
+        },
+      ),
+    ).toBe("#1 2026-09-19 · TWD 1015\n轉帳・轉帳 TWD 1000；手續費・金融費用 TWD 15\n台新 → 國泰");
+  });
+
   it("ignores unauthorized and group messages", async () => {
     const { bot, repository } = createHarness();
 
