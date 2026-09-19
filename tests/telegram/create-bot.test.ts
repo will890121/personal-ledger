@@ -2,7 +2,7 @@ import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 import { describe, expect, it } from "vitest";
 
-import { createLedgerBot, formatRecent } from "../../src/telegram/create-bot.js";
+import { createLedgerBot, formatRecentPage } from "../../src/telegram/create-bot.js";
 import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
 import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
 import { FakeReferenceRepository } from "../support/fake-reference-repository.js";
@@ -103,7 +103,7 @@ function callbackUpdate(updateId: number, data: string): Update {
 describe("createLedgerBot", () => {
   it("formats recent transactions with numbered accounting and reference details", () => {
     expect(
-      formatRecent(
+      formatRecentPage(
         [
           {
             transactionId: "transaction-1",
@@ -156,7 +156,15 @@ describe("createLedgerBot", () => {
           ],
         },
       ),
-    ).toBe("#1 2026-09-19 · TWD 1015\n轉帳・轉帳 TWD 1000；手續費・金融費用 TWD 15\n台新 → 國泰");
+    ).toMatchObject({
+      text: "交易 1 / 1\n日期：2026-09-19\n總金額：TWD 1015\n帳戶：台新 → 國泰\n配置 1：轉帳・轉帳 · TWD 1000\n配置 2：手續費・金融費用 · TWD 15",
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: "刪除", callback_data: "delete:transaction-1" }],
+          [{ text: "關閉清單", callback_data: "dismiss-recent" }],
+        ],
+      },
+    });
   });
 
   it("ignores unauthorized and group messages", async () => {

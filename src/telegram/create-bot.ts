@@ -1,5 +1,5 @@
 import { Bot } from "grammy";
-import type { UserFromGetMe } from "grammy/types";
+import type { InlineKeyboardMarkup, UserFromGetMe } from "grammy/types";
 
 import { cancelDraft, confirmDraft } from "../application/confirm-draft.js";
 import { createDraft } from "../application/create-draft.js";
@@ -41,47 +41,78 @@ const recentPurposeLabels: Record<ConfirmedTransaction["allocations"][number]["p
     fee: "手續費",
   };
 
-export function formatRecent(
+export function formatRecentPage(
   transactions: readonly ConfirmedTransaction[],
   references: Partial<ReferenceSnapshot> = {},
-): string {
+  selectedTransactionId?: string,
+): { readonly text: string; readonly replyMarkup?: InlineKeyboardMarkup } {
   if (transactions.length === 0) {
-    return "尚無已確認交易。";
+    return { text: "尚無已確認交易。" };
   }
-  return transactions
-    .map((transaction, index) => {
-      const accountFrom = references.accounts?.find(
-        (item) => item.accountId === transaction.accountFromId,
-      );
-      const accountTo = references.accounts?.find(
-        (item) => item.accountId === transaction.accountToId,
-      );
-      const merchant = references.merchants?.find(
-        (item) => item.merchantId === transaction.merchantId,
-      );
-      const allocationSummary = transaction.allocations
-        .map((allocation) => {
-          const category = allocation.subcategory
-            ? `${allocation.category}／${allocation.subcategory}`
-            : allocation.category;
-          return `${recentPurposeLabels[allocation.purpose]}・${category} ${allocation.amount.currency} ${allocation.amount.amount}`;
-        })
-        .join("；");
-      const referenceSummary = [
-        ...(merchant ? [merchant.name] : []),
-        ...(accountFrom && accountTo
-          ? [`${accountFrom.name} → ${accountTo.name}`]
-          : accountFrom
-            ? [accountFrom.name]
+  const requestedIndex = selectedTransactionId
+    ? transactions.findIndex((item) => item.transactionId === selectedTransactionId)
+    : 0;
+  const index = requestedIndex >= 0 ? requestedIndex : 0;
+  const transaction = transactions[index];
+  if (!transaction) return { text: "尚無已確認交易。" };
+  const accountFrom = references.accounts?.find(
+    (item) => item.accountId === transaction.accountFromId,
+  );
+  const accountTo = references.accounts?.find((item) => item.accountId === transaction.accountToId);
+  const merchant = references.merchants?.find((item) => item.merchantId === transaction.merchantId);
+  const allocationLines = transaction.allocations.map((allocation, allocationIndex) => {
+    const category = allocation.subcategory
+      ? `${allocation.category}／${allocation.subcategory}`
+      : allocation.category;
+    return `配置 ${String(allocationIndex + 1)}：${recentPurposeLabels[allocation.purpose]}・${category} · ${allocation.amount.currency} ${allocation.amount.amount}`;
+  });
+  const referenceLines = [
+    ...(merchant ? [`商家：${merchant.name}`] : []),
+    ...(accountFrom && accountTo
+      ? [`帳戶：${accountFrom.name} → ${accountTo.name}`]
+      : accountFrom
+        ? [`帳戶：${accountFrom.name}`]
+        : []),
+  ];
+  const navigation = [
+    ...(index > 0
+      ? [
+          {
+            text: "上一筆",
+            callback_data: `recent:${transactions[index - 1]?.transactionId ?? ""}`,
+          },
+        ]
+      : []),
+    ...(index < transactions.length - 1
+      ? [
+          {
+            text: "下一筆",
+            callback_data: `recent:${transactions[index + 1]?.transactionId ?? ""}`,
+          },
+        ]
+      : []),
+  ];
+  return {
+    text: [
+      `交易 ${String(index + 1)} / ${String(transactions.length)}`,
+      `日期：${transaction.occurredDate}`,
+      `總金額：${transaction.amount.currency} ${transaction.amount.amount}`,
+      ...referenceLines,
+      ...allocationLines,
+    ].join("\n"),
+    replyMarkup: {
+      inline_keyboard: [
+        ...(navigation.length ? [navigation] : []),
+        [
+          ...(transaction.allocations.some((item) => item.purpose === "expense")
+            ? [{ text: "退款", callback_data: `refund:${transaction.transactionId}` }]
             : []),
-      ];
-      return [
-        `#${String(index + 1)} ${transaction.occurredDate} · ${transaction.amount.currency} ${transaction.amount.amount}`,
-        allocationSummary,
-        ...(referenceSummary.length ? [referenceSummary.join(" · ")] : []),
-      ].join("\n");
-    })
-    .join("\n\n");
+          { text: "刪除", callback_data: `delete:${transaction.transactionId}` },
+        ],
+        [{ text: "關閉清單", callback_data: "dismiss-recent" }],
+      ],
+    },
+  };
 }
 
 export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
@@ -104,30 +135,36 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       dependencies.referenceRepository,
       dependencies.ownerId,
     );
-    await context.reply(formatRecent(transactions, references), {
-      ...(transactions.length
-        ? {
-            reply_markup: {
-              inline_keyboard: [
-                ...transactions.map((transaction, index) => [
-                  ...(transaction.allocations.some((item) => item.purpose === "expense")
-                    ? [
-                        {
-                          text: `退款 #${String(index + 1)}`,
-                          callback_data: `refund:${transaction.transactionId}`,
-                        },
-                      ]
-                    : []),
-                  {
-                    text: `刪除 #${String(index + 1)}`,
-                    callback_data: `delete:${transaction.transactionId}`,
-                  },
-                ]),
-                [{ text: "關閉清單", callback_data: "dismiss-recent" }],
-              ],
-            },
-          }
-        : {}),
+    const page = formatRecentPage(transactions, references);
+    await context.reply(page.text, {
+      ...(page.replyMarkup ? { reply_markup: page.replyMarkup } : {}),
+    });
+  });
+
+  bot.callbackQuery(/^recent:/, async (context) => {
+    const transactionId = context.callbackQuery.data.slice("recent:".length);
+    const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const page = formatRecentPage(transactions, references, transactionId);
+    await context.answerCallbackQuery();
+    await context.editMessageText(page.text, {
+      ...(page.replyMarkup ? { reply_markup: page.replyMarkup } : {}),
+    });
+  });
+
+  bot.callbackQuery("recent-home", async (context) => {
+    const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const page = formatRecentPage(transactions, references);
+    await context.answerCallbackQuery();
+    await context.editMessageText(page.text, {
+      ...(page.replyMarkup ? { reply_markup: page.replyMarkup } : {}),
     });
   });
 
@@ -170,7 +207,7 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
           inline_keyboard: [
             [
               { text: "確認刪除", callback_data: `delete-confirm:${transactionId}` },
-              { text: "取消", callback_data: "delete-cancel" },
+              { text: "取消", callback_data: `delete-cancel:${transactionId}` },
             ],
           ],
         },
@@ -178,9 +215,18 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
     );
   });
 
-  bot.callbackQuery("delete-cancel", async (context) => {
+  bot.callbackQuery(/^delete-cancel:/, async (context) => {
+    const transactionId = context.callbackQuery.data.slice("delete-cancel:".length);
+    const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const page = formatRecentPage(transactions, references, transactionId);
     await context.answerCallbackQuery({ text: "已取消" });
-    await context.editMessageText("已取消刪除。請重新使用 /recent 查看交易。");
+    await context.editMessageText(page.text, {
+      ...(page.replyMarkup ? { reply_markup: page.replyMarkup } : {}),
+    });
   });
 
   bot.callbackQuery(/^delete-confirm:/, async (context) => {
@@ -219,7 +265,11 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
         },
       );
       await context.answerCallbackQuery({ text: "交易已刪除" });
-      await context.editMessageText("交易已刪除。");
+      await context.editMessageText("交易已刪除。", {
+        reply_markup: {
+          inline_keyboard: [[{ text: "返回交易清單", callback_data: "recent-home" }]],
+        },
+      });
     } catch {
       await context.answerCallbackQuery({ text: "無法刪除交易" });
     }
@@ -284,7 +334,51 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
     );
     const preview = formatPreview(draft, { ...references, refundTarget: transaction });
     await context.answerCallbackQuery({ text: "請確認退款" });
-    await context.reply(preview.text, { reply_markup: preview.replyMarkup });
+    await context.editMessageText(preview.text, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "確認退款", callback_data: `refund-confirm:${draft.draftId}` },
+            { text: "取消", callback_data: `refund-cancel:${draft.draftId}` },
+          ],
+        ],
+      },
+    });
+  });
+
+  bot.callbackQuery(/^refund-confirm:/, async (context) => {
+    const draftId = context.callbackQuery.data.slice("refund-confirm:".length);
+    const transaction = await confirmDraft(
+      dependencies.repository,
+      draftId,
+      dependencies.now().toISOString(),
+      dependencies.generateId(),
+    );
+    await context.answerCallbackQuery({ text: "退款已入帳" });
+    await context.editMessageText(
+      `退款已入帳：${transaction.amount.currency} ${transaction.amount.amount}`,
+      {
+        reply_markup: {
+          inline_keyboard: [[{ text: "返回交易清單", callback_data: "recent-home" }]],
+        },
+      },
+    );
+  });
+
+  bot.callbackQuery(/^refund-cancel:/, async (context) => {
+    const draftId = context.callbackQuery.data.slice("refund-cancel:".length);
+    const draft = await dependencies.repository.getDraft(draftId);
+    await cancelDraft(dependencies.repository, draftId);
+    const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const page = formatRecentPage(transactions, references, draft?.refundTargetTransactionId);
+    await context.answerCallbackQuery({ text: "已取消退款" });
+    await context.editMessageText(page.text, {
+      ...(page.replyMarkup ? { reply_markup: page.replyMarkup } : {}),
+    });
   });
 
   bot.callbackQuery(/^confirm:/, async (context) => {
