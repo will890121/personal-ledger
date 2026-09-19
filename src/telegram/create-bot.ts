@@ -59,10 +59,14 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
         ? {
             reply_markup: {
               inline_keyboard: transactions.map((transaction) => [
-                {
-                  text: `退款 ${transaction.amount.amount}`,
-                  callback_data: `refund:${transaction.transactionId}`,
-                },
+                ...(transaction.allocations.some((item) => item.purpose === "expense")
+                  ? [
+                      {
+                        text: `退款 ${transaction.occurredDate.slice(5)} · ${transaction.amount.amount}`,
+                        callback_data: `refund:${transaction.transactionId}`,
+                      },
+                    ]
+                  : []),
                 { text: "刪除", callback_data: `delete:${transaction.transactionId}` },
               ]),
             },
