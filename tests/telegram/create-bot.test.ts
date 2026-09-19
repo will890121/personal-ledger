@@ -156,7 +156,7 @@ describe("createLedgerBot", () => {
     expect(calls.map(getText)).toContainEqual(expect.stringContaining("本月摘要"));
   });
 
-  it("records a callback event and soft-deletes only once", async () => {
+  it("requires confirmation, then records a callback event and soft-deletes only once", async () => {
     const { bot, repository } = createHarness();
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
     const draftId = [...repository.drafts.keys()][0] ?? "";
@@ -164,7 +164,11 @@ describe("createLedgerBot", () => {
     const transaction = [...repository.transactions.values()][0];
     expect(transaction).toBeDefined();
     await bot.handleUpdate(callbackUpdate(3, `delete:${transaction?.transactionId ?? ""}`));
-    await bot.handleUpdate(callbackUpdate(3, `delete:${transaction?.transactionId ?? ""}`));
+    await expect(
+      repository.getTransaction("123", transaction?.transactionId ?? ""),
+    ).resolves.toMatchObject({ status: "confirmed" });
+    await bot.handleUpdate(callbackUpdate(4, `delete-confirm:${transaction?.transactionId ?? ""}`));
+    await bot.handleUpdate(callbackUpdate(4, `delete-confirm:${transaction?.transactionId ?? ""}`));
     await expect(
       repository.getTransaction("123", transaction?.transactionId ?? ""),
     ).resolves.toMatchObject({ status: "deleted" });

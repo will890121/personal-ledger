@@ -58,17 +58,20 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
       ...(transactions.length
         ? {
             reply_markup: {
-              inline_keyboard: transactions.map((transaction) => [
-                ...(transaction.allocations.some((item) => item.purpose === "expense")
-                  ? [
-                      {
-                        text: `退款 ${transaction.occurredDate.slice(5)} · ${transaction.amount.amount}`,
-                        callback_data: `refund:${transaction.transactionId}`,
-                      },
-                    ]
-                  : []),
-                { text: "刪除", callback_data: `delete:${transaction.transactionId}` },
-              ]),
+              inline_keyboard: [
+                ...transactions.map((transaction) => [
+                  ...(transaction.allocations.some((item) => item.purpose === "expense")
+                    ? [
+                        {
+                          text: `退款 ${transaction.occurredDate.slice(5)} · ${transaction.amount.amount}`,
+                          callback_data: `refund:${transaction.transactionId}`,
+                        },
+                      ]
+                    : []),
+                  { text: "刪除", callback_data: `delete:${transaction.transactionId}` },
+                ]),
+                [{ text: "關閉清單", callback_data: "dismiss-recent" }],
+              ],
             },
           }
         : {}),
@@ -91,8 +94,44 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
     await context.reply(formatSummary("本月摘要", summary));
   });
 
+  bot.callbackQuery("dismiss-recent", async (context) => {
+    await context.answerCallbackQuery();
+    await context.deleteMessage();
+  });
+
   bot.callbackQuery(/^delete:/, async (context) => {
     const transactionId = context.callbackQuery.data.slice("delete:".length);
+    const transaction = await dependencies.repository.getTransaction(
+      dependencies.ownerId,
+      transactionId,
+    );
+    if (!transaction || transaction.status === "deleted") {
+      await context.answerCallbackQuery({ text: "交易不存在或已刪除" });
+      return;
+    }
+    await context.answerCallbackQuery({ text: "請確認刪除" });
+    await context.editMessageText(
+      `確認刪除：${transaction.occurredDate} · ${transaction.amount.currency} ${transaction.amount.amount}`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "確認刪除", callback_data: `delete-confirm:${transactionId}` },
+              { text: "取消", callback_data: "delete-cancel" },
+            ],
+          ],
+        },
+      },
+    );
+  });
+
+  bot.callbackQuery("delete-cancel", async (context) => {
+    await context.answerCallbackQuery({ text: "已取消" });
+    await context.editMessageText("已取消刪除。請重新使用 /recent 查看交易。");
+  });
+
+  bot.callbackQuery(/^delete-confirm:/, async (context) => {
+    const transactionId = context.callbackQuery.data.slice("delete-confirm:".length);
     const transaction = await dependencies.repository.getTransaction(
       dependencies.ownerId,
       transactionId,
