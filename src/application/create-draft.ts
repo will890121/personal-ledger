@@ -1,6 +1,8 @@
 import type { TransactionDraft } from "../domain/ledger.js";
 import { parseTransaction, type ParseResult } from "../parser/rule-parser.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
+import type { ReferenceRepository } from "../ports/reference-repository.js";
+import { loadReferenceSnapshot } from "./reference-data.js";
 
 export interface CreateDraftCommand {
   readonly ownerId: string;
@@ -13,12 +15,13 @@ export interface CreateDraftCommand {
 
 export interface CreateDraftDependencies {
   readonly repository: LedgerRepository;
+  readonly referenceRepository: ReferenceRepository;
   readonly generateId: () => string;
 }
 
 export type CreateDraftResult =
   | { readonly kind: "draft"; readonly draft: TransactionDraft }
-  | Extract<ParseResult, { kind: "missing_fields" }>
+  | Exclude<ParseResult, { kind: "draft" }>
   | { readonly kind: "duplicate"; readonly eventId: string };
 
 export async function createDraft(
@@ -40,16 +43,19 @@ export async function createDraft(
     return { kind: "duplicate", eventId: recorded.eventId };
   }
 
+  const references = await loadReferenceSnapshot(dependencies.referenceRepository, command.ownerId);
   const parsed = parseTransaction(command.text, {
     ownerId: command.ownerId,
     requestId: dependencies.generateId(),
     sourceEventId: eventId,
     draftId: dependencies.generateId(),
     allocationId: dependencies.generateId(),
+    additionalAllocationId: dependencies.generateId(),
     today: command.occurredDate,
+    ...references,
   });
 
-  if (parsed.kind === "missing_fields") {
+  if (parsed.kind !== "draft") {
     return parsed;
   }
 

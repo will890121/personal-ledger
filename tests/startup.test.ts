@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
@@ -15,6 +15,12 @@ describe("production startup", () => {
     execFileSync("pnpm", ["build"], {
       cwd: projectRoot,
     });
+  });
+
+  it("packages every database migration", () => {
+    expect(
+      existsSync(new URL("../dist/src/db/migrations/0002_accounting_core.sql", import.meta.url)),
+    ).toBe(true);
   });
 
   it("starts the compiled application through the package start command", () => {

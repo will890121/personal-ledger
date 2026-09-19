@@ -33,8 +33,8 @@ describe("ledger actions", () => {
     const repository = new FakeLedgerRepository();
     await repository.saveDraft(makeDraft(1));
 
-    const first = await confirmDraft(repository, "draft-1", "2026-09-18T01:00:00.000Z");
-    const second = await confirmDraft(repository, "draft-1", "2026-09-18T01:01:00.000Z");
+    const first = await confirmDraft(repository, "draft-1", "2026-09-18T01:00:00.000Z", "audit-1");
+    const second = await confirmDraft(repository, "draft-1", "2026-09-18T01:01:00.000Z", "audit-2");
 
     expect(second).toEqual(first);
     expect(repository.transactions.size).toBe(1);
@@ -57,6 +57,7 @@ describe("ledger actions", () => {
       await repository.confirmDraft(
         `draft-${String(index)}`,
         `2026-09-18T01:${String(index).padStart(2, "0")}:00.000Z`,
+        `audit-${String(index)}`,
       );
     }
 
