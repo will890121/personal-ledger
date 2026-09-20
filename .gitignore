@@ -1,5 +1,6 @@
 .env
 .DS_Store
+backups/
 coverage/
 data/
 dist/
