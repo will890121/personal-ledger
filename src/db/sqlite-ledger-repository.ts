@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { IncompleteDraftSchema, type IncompleteDraft } from "../domain/draft.js";
 import {
   ConfirmedTransactionSchema,
   TransactionDraftSchema,
@@ -10,16 +11,40 @@ import {
 import type {
   AuditAction,
   AuditEvent,
+  BatchInput,
   DeleteTransactionCommand,
+  DraftMeta,
+  DraftRecord,
+  DraftSelector,
   InputEventInput,
   LedgerRepository,
   LinkTransactionCommand,
+  PendingDraftSummary,
+  PendingQuery,
+  PendingStatus,
   UnlinkTransactionCommand,
   UpdateTransactionCommand,
 } from "../ports/ledger-repository.js";
 
 interface DraftRow {
   draft_json: string;
+}
+interface DraftRecordRow {
+  draft_id: string;
+  draft_ref: string;
+  owner_id: string;
+  status: string;
+  created_date: string | null;
+  batch_id: string | null;
+  draft_json: string;
+}
+interface PendingRow {
+  draft_id: string;
+  draft_ref: string;
+  occurred_date: string;
+  amount: string | null;
+  draft_json: string;
+  created_date: string | null;
 }
 interface EventRow {
   event_id: string;
@@ -100,25 +125,194 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return Promise.resolve({ created: false, eventId: existing.event_id });
   }
 
-  public saveDraft(draft: TransactionDraft): Promise<void> {
-    const value = TransactionDraftSchema.parse(draft);
+  public saveBatch(input: BatchInput): Promise<void> {
     this.database
       .prepare(
-        `INSERT INTO drafts (draft_id, owner_id, request_id, source_event_id, occurred_date, amount, currency, status, draft_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO batches (batch_id, owner_id, source_event_id, item_count, created_at)
+      VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(input.batchId, input.ownerId, input.sourceEventId, input.itemCount, input.createdAt);
+    return Promise.resolve();
+  }
+
+  public saveDraft(draft: TransactionDraft, meta: DraftMeta = {}): Promise<string> {
+    const value = TransactionDraftSchema.parse(draft);
+    const draftRef = this.generateDraftRef(value.ownerId);
+    this.database
+      .prepare(
+        `INSERT INTO drafts (draft_id, draft_ref, owner_id, request_id, source_event_id, batch_id, batch_index, occurred_date, amount, currency, status, draft_json, created_date)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         value.draftId,
+        draftRef,
         value.ownerId,
         value.requestId,
         value.sourceEventId,
+        meta.batchId ?? null,
+        meta.batchIndex ?? null,
         value.occurredDate,
         value.amount.amount,
         value.amount.currency,
         value.status,
         JSON.stringify(value),
+        meta.createdDate ?? null,
+      );
+    return Promise.resolve(draftRef);
+  }
+
+  public saveIncompleteDraft(draft: IncompleteDraft, meta: DraftMeta): Promise<string> {
+    const value = IncompleteDraftSchema.parse(draft);
+    const draftRef = this.generateDraftRef(value.ownerId);
+    this.database
+      .prepare(
+        `INSERT INTO drafts (draft_id, draft_ref, owner_id, request_id, source_event_id, batch_id, batch_index, occurred_date, amount, currency, status, pending_fields, draft_json, created_date)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'awaiting_input', ?, ?, ?)`,
+      )
+      .run(
+        value.draftId,
+        draftRef,
+        value.ownerId,
+        value.requestId,
+        value.sourceEventId,
+        meta.batchId ?? value.batchId,
+        meta.batchIndex ?? value.batchIndex,
+        value.partial.occurredDate,
+        JSON.stringify(value.pendingFields),
+        JSON.stringify(value),
+        meta.createdDate ?? null,
+      );
+    return Promise.resolve(draftRef);
+  }
+
+  public replaceDraft(draftId: string, next: TransactionDraft | IncompleteDraft): Promise<void> {
+    if (next.status === "awaiting_input") {
+      const value = IncompleteDraftSchema.parse(next);
+      this.database
+        .prepare(
+          `UPDATE drafts
+        SET status = 'awaiting_input', amount = NULL, currency = NULL, occurred_date = ?, pending_fields = ?, draft_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE draft_id = ?`,
+        )
+        .run(
+          value.partial.occurredDate,
+          JSON.stringify(value.pendingFields),
+          JSON.stringify(value),
+          draftId,
+        );
+      return Promise.resolve();
+    }
+
+    const value = TransactionDraftSchema.parse(next);
+    this.database
+      .prepare(
+        `UPDATE drafts
+      SET status = ?, amount = ?, currency = ?, occurred_date = ?, pending_fields = NULL, draft_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE draft_id = ?`,
+      )
+      .run(
+        value.status,
+        value.amount.amount,
+        value.amount.currency,
+        value.occurredDate,
+        JSON.stringify(value),
+        draftId,
       );
     return Promise.resolve();
+  }
+
+  public getDraftRecord(selector: DraftSelector): Promise<DraftRecord | null> {
+    const query =
+      "draftId" in selector
+        ? { where: "draft_id = ?", args: [selector.draftId] }
+        : "draftRef" in selector
+          ? {
+              where: "owner_id = ? AND draft_ref = ?",
+              args: [selector.ownerId, selector.draftRef],
+            }
+          : {
+              where: "preview_chat_id = ? AND preview_message_id = ?",
+              args: [selector.previewChatId, selector.previewMessageId],
+            };
+    const row = this.database
+      .prepare(
+        `SELECT draft_id, draft_ref, owner_id, status, created_date, batch_id, draft_json
+       FROM drafts WHERE ${query.where}`,
+      )
+      .get(...query.args) as DraftRecordRow | undefined;
+    if (!row) return Promise.resolve(null);
+
+    const parsed: unknown = JSON.parse(row.draft_json);
+    // 以草稿 JSON 自身的狀態判斷型別，而非資料列狀態：封存或取消會改變資料列狀態，
+    // 但不會改寫草稿內容，兩者必須分開看待。
+    const isIncomplete =
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { status?: string }).status === "awaiting_input";
+    return Promise.resolve({
+      draftId: row.draft_id,
+      draftRef: row.draft_ref,
+      ownerId: row.owner_id,
+      status: row.status as TransactionDraft["status"],
+      createdDate: row.created_date,
+      batchId: row.batch_id,
+      draft: isIncomplete ? null : TransactionDraftSchema.parse(parsed),
+      incomplete: isIncomplete ? IncompleteDraftSchema.parse(parsed) : null,
+    });
+  }
+
+  public setPreviewMessage(draftId: string, chatId: string, messageId: string): Promise<void> {
+    this.database
+      .prepare("UPDATE drafts SET preview_chat_id = ?, preview_message_id = ? WHERE draft_id = ?")
+      .run(chatId, messageId, draftId);
+    return Promise.resolve();
+  }
+
+  public touchDraftDate(draftId: string, date: string): Promise<void> {
+    this.database
+      .prepare("UPDATE drafts SET created_date = ?, updated_at = CURRENT_TIMESTAMP WHERE draft_id = ?")
+      .run(date, draftId);
+    return Promise.resolve();
+  }
+
+  public archiveDraft(draftId: string): Promise<void> {
+    this.database
+      .prepare(
+        "UPDATE drafts SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE draft_id = ?",
+      )
+      .run(draftId);
+    return Promise.resolve();
+  }
+
+  public listPendingDrafts(query: PendingQuery): Promise<PendingDraftSummary[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT draft_id, draft_ref, occurred_date, amount, draft_json, created_date
+       FROM drafts
+       WHERE owner_id = ? AND status = ?
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT ? OFFSET ?`,
+      )
+      .all(query.ownerId, query.status, query.limit, query.offset) as PendingRow[];
+    return Promise.resolve(rows.map((row) => toPendingSummary(row)));
+  }
+
+  public countPendingDrafts(ownerId: string, status: PendingStatus): Promise<number> {
+    const row = this.database
+      .prepare("SELECT count(*) AS total FROM drafts WHERE owner_id = ? AND status = ?")
+      .get(ownerId, status) as { total: number };
+    return Promise.resolve(row.total);
+  }
+
+  private generateDraftRef(ownerId: string): string {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = randomBytes(4).toString("hex");
+      const clash = this.database
+        .prepare("SELECT 1 FROM drafts WHERE owner_id = ? AND draft_ref = ?")
+        .get(ownerId, candidate);
+      if (!clash) return candidate;
+    }
+    throw new Error("unable to allocate draft reference");
   }
 
   public getDraft(draftId: string): Promise<TransactionDraft | null> {
@@ -575,4 +769,23 @@ export class SqliteLedgerRepository implements LedgerRepository {
       ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
     });
   }
+}
+
+function toPendingSummary(row: PendingRow): PendingDraftSummary {
+  const parsed: unknown = JSON.parse(row.draft_json);
+  const rawSegment =
+    typeof parsed === "object" && parsed !== null
+      ? ((parsed as { partial?: { rawSegment?: string }; rawInputSnapshot?: string }).partial
+          ?.rawSegment ??
+        (parsed as { rawInputSnapshot?: string }).rawInputSnapshot ??
+        "")
+      : "";
+  return {
+    draftId: row.draft_id,
+    draftRef: row.draft_ref,
+    occurredDate: row.occurred_date,
+    amount: row.amount,
+    rawSegment,
+    createdDate: row.created_date,
+  };
 }
