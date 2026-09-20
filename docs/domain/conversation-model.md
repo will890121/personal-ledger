@@ -56,7 +56,7 @@ M3a 不包含：代墊與回收、借貸、自然語言修改、AI 解析、持�
 
 SQLite 無法直接放寬 `NOT NULL`，`drafts` 比照 migration 0002 的重建手法處理：建新表、搬資料、換名。重建必須保留既有草稿與 `confirmed_transaction_id`，且 `transactions.draft_id` 外鍵在遷移後仍然成立。
 
-`draft_ref` 是 8 字元 base32 短識別，同一擁有者內唯一，只用於 callback 與清單顯示。`pending_fields` 以 JSON 保存 `{ field, candidateIds }` 陣列。
+`draft_ref` 是 8 字元十六進位短識別，同一擁有者內唯一，只用於 callback 與清單顯示。`pending_fields` 以 JSON 保存 `{ field, candidateIds }` 陣列。
 
 `drafts.status` 不新增值。M1 已定義的八個狀態中，M3a 讓 `awaiting_input` 與 `archived` 第一次實際被使用；`needs_attention` 保留給 M4。
 
@@ -100,12 +100,14 @@ Telegram 的 `callback_data` 上限為 64 bytes。既有的 `delete-confirm:<uui
 |---|---|
 | 候選按鈕 | callback 中的 `draft_ref`、欄位與索引 |
 | reply 預覽訊息 | `reply_to_message_id` 反查 `drafts.preview_message_id` |
-| 無 reply 的文字 | 先當新交易解析；失敗且存在 `awaiting_input` 草稿時，列出這些草稿供指定 |
+| 無 reply 的文字 | 純數字且有草稿正在等金額時，列出那些草稿供指定；其餘一律當新交易解析 |
 | `/pending` 點選 | 同候選按鈕 |
 
 四條入口收斂到同一個應用層函式 `answerDraft`。該函式記錄 InputEvent（callback 同樣是不可變輸入事件）、填入欄位值、重新驗證。驗證通過即升級為 `TransactionDraft` 並重發完整預覽；仍有缺漏則繼續追問下一個欄位。
 
 即使只有一筆 `awaiting_input` 草稿，未指定草稿的文字仍需使用者明確選擇，不自動套用。
+
+純數字訊息必須在建立批次**之前**攔截。`120` 這種輸入本身會被解析成一筆缺分類的草稿，若先建批次就永遠走不到候選清單，還會留下使用者沒有要的草稿。攔截條件是「訊息只有數字」且「存在正在等金額的草稿」；兩者不同時成立時，一律照新交易處理。
 
 ### 6.3 過期草稿
 
@@ -154,8 +156,10 @@ Telegram 的 `callback_data` 上限為 64 bytes。既有的 `delete-confirm:<uui
 
 | 案例 | 語句 | 預期 |
 |---|---|---|
-| AC-09 | `午餐 120，咖啡 60` | 兩筆獨立草稿，共用同一 `batch_id` 與來源事件，各自可獨立確認或取消 |
-| AC-10 | 三段中一段缺金額 | 兩筆正常預覽，第三筆存為 `awaiting_input` 並發出金額追問，補齊後升級並可確認 |
+| AC-09 | `午餐 120，Uber 245` | 兩筆獨立草稿，共用同一 `batch_id` 與來源事件，各自可獨立確認或取消 |
+| AC-10 | `午餐 120，Uber 245，午餐` | 兩筆正常預覽，第三筆存為 `awaiting_input` 並發出金額追問，補齊後升級並可確認 |
+
+規格書的 AC-09 原句為 `午餐 120，咖啡 60`。M2 的參照資料沒有「咖啡」這個分類或商家，而解析器對未知參照一律不猜測，因此該句的正確行為是一筆草稿加一筆待補分類的追問，屬於 AC-10 的路徑而非 AC-09。驗收改用兩個皆可解析的段落來檢驗批次語意；`咖啡 60` 則作為缺分類追問的驗收案例保留。規格書不因此修改，因為兩者的行為都符合既有的「未知參照不猜測」原則。
 
 通過條件另包含：`/pending` 正確分組並可封存；跨日草稿的舊按鈕不入帳；`pnpm check` 全數通過；Docker 啟動後 migration 0003 成功且既有 M2 資料完整。
 
