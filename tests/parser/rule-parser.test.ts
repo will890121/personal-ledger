@@ -41,13 +41,66 @@ describe("parseTransaction", () => {
     expect(parseTransaction("午餐", context)).toEqual({
       kind: "missing_fields",
       fields: ["amount"],
+      partial: {
+        occurredDate: "2026-09-18",
+        rawSegment: "午餐",
+        allocations: [
+          {
+            allocationId: "allocation-1",
+            fundsEffect: "outflow",
+            purpose: "expense",
+            category: "餐飲",
+            subcategory: "午餐",
+          },
+        ],
+      },
     });
   });
 
   it("rejects ambiguous multiple amounts", () => {
-    expect(parseTransaction("午餐 120 另加 30", context)).toEqual({
-      kind: "missing_fields",
-      fields: ["amount"],
+    const result = parseTransaction("午餐 120 另加 30", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["amount"]);
+  });
+
+  it("returns the resolved allocation shell when only the amount is missing", () => {
+    const result = parseTransaction("午餐", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["amount"]);
+    expect(result.partial.rawSegment).toBe("午餐");
+    expect(result.partial.occurredDate).toBe("2026-09-18");
+    expect(result.partial.allocations[0]).toMatchObject({
+      fundsEffect: "outflow",
+      purpose: "expense",
+      category: "餐飲",
+      subcategory: "午餐",
     });
+    expect(result.partial.allocations[0]?.amount).toBeUndefined();
+  });
+
+  it("carries the relative date into the partial result", () => {
+    const result = parseTransaction("昨天 午餐", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.partial.occurredDate).toBe("2026-09-17");
+  });
+
+  it("returns an allocation shell without a category when the category is unknown", () => {
+    const result = parseTransaction("咖啡 60", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category"]);
+    expect(result.partial.allocations[0]).toMatchObject({
+      fundsEffect: "outflow",
+      purpose: "expense",
+      amount: { amount: "60", currency: "TWD" },
+    });
+    expect(result.partial.allocations[0]?.categoryId).toBeUndefined();
   });
 });

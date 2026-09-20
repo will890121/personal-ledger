@@ -86,7 +86,7 @@ describe("createDraft", () => {
       },
     );
 
-    expect(result).toEqual({ kind: "missing_fields", fields: ["amount"] });
+    expect(result).toMatchObject({ kind: "missing_fields", fields: ["amount"] });
     expect(repository.inputEvents.size).toBe(1);
     expect(repository.drafts.size).toBe(0);
   });
@@ -128,7 +128,7 @@ describe("createDraft", () => {
       },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "ambiguous",
       field: "account",
       candidateIds: ["card-1", "card-2"],
