@@ -116,6 +116,31 @@ async function handleBatchResult(
 export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependencies): void {
   bot.callbackQuery(/^confirm:/, async (context) => {
     const draftId = context.callbackQuery.data.slice("confirm:".length);
+    const record = await dependencies.repository.getDraftRecord({ draftId });
+    if (!record?.draft) {
+      await context.answerCallbackQuery({ text: "草稿不存在" });
+      return;
+    }
+    // 跨日草稿不直接入帳：舊訊息裡的按鈕可能在幾天後被誤觸，必須重新預覽並再確認一次。
+    if (record.createdDate !== null && record.createdDate !== dependencies.today()) {
+      await dependencies.repository.touchDraftDate(draftId, dependencies.today());
+      const references = await loadReferenceSnapshot(
+        dependencies.referenceRepository,
+        dependencies.ownerId,
+      );
+      const preview = formatPreview(record.draft, references);
+      await context.answerCallbackQuery({ text: "草稿已跨日，請重新確認" });
+      const sent = await context.reply(
+        [`建立日期：${record.createdDate}`, preview.text].join("\n"),
+        { reply_markup: preview.replyMarkup },
+      );
+      await dependencies.repository.setPreviewMessage(
+        draftId,
+        String(sent.chat.id),
+        String(sent.message_id),
+      );
+      return;
+    }
     const transaction = await confirmDraft(
       dependencies.repository,
       draftId,
