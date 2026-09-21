@@ -270,7 +270,9 @@ export class SqliteLedgerRepository implements LedgerRepository {
 
   public touchDraftDate(draftId: string, date: string): Promise<void> {
     this.database
-      .prepare("UPDATE drafts SET created_date = ?, updated_at = CURRENT_TIMESTAMP WHERE draft_id = ?")
+      .prepare(
+        "UPDATE drafts SET created_date = ?, updated_at = CURRENT_TIMESTAMP WHERE draft_id = ?",
+      )
       .run(date, draftId);
     return Promise.resolve();
   }

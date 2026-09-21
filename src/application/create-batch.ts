@@ -130,10 +130,7 @@ export async function createBatch(
   });
   if (!recorded.created) return { kind: "duplicate", eventId: recorded.eventId };
 
-  const references = await loadReferenceSnapshot(
-    dependencies.referenceRepository,
-    command.ownerId,
-  );
+  const references = await loadReferenceSnapshot(dependencies.referenceRepository, command.ownerId);
   const batchId = dependencies.generateId();
   await dependencies.repository.saveBatch({
     batchId,

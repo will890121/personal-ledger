@@ -98,10 +98,7 @@ export function formatRecentPage(
   };
 }
 
-export function registerTransactionHandlers(
-  bot: Bot,
-  dependencies: LedgerBotDependencies,
-): void {
+export function registerTransactionHandlers(bot: Bot, dependencies: LedgerBotDependencies): void {
   bot.command("recent", async (context) => {
     const transactions = await listRecent(dependencies.repository, dependencies.ownerId);
     const references = await loadReferenceSnapshot(
@@ -337,5 +334,4 @@ export function registerTransactionHandlers(
       ...(page.replyMarkup ? { reply_markup: page.replyMarkup } : {}),
     });
   });
-
 }

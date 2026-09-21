@@ -2,9 +2,7 @@ import { IncompleteDraftSchema, type IncompleteDraft } from "../../src/domain/dr
 import { TransactionDraftSchema, type TransactionDraft } from "../../src/domain/ledger.js";
 import type { Category } from "../../src/domain/reference-data.js";
 
-export function incompleteLunchDraft(
-  overrides: Partial<IncompleteDraft> = {},
-): IncompleteDraft {
+export function incompleteLunchDraft(overrides: Partial<IncompleteDraft> = {}): IncompleteDraft {
   return IncompleteDraftSchema.parse({
     draftId: "draft-1",
     ownerId: "owner-1",
@@ -58,9 +56,7 @@ export function incompleteDraftWithPendingCategory(candidateIds: string[]): Inco
   });
 }
 
-export function completeLunchDraft(
-  overrides: Partial<TransactionDraft> = {},
-): TransactionDraft {
+export function completeLunchDraft(overrides: Partial<TransactionDraft> = {}): TransactionDraft {
   return TransactionDraftSchema.parse({
     draftId: "draft-3",
     ownerId: "owner-1",

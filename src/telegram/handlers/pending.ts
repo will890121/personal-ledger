@@ -30,7 +30,10 @@ function groupLines(page: PendingPage): string[] {
 
 function groupKeyboard(page: PendingPage): InlineKeyboardButton[][] {
   const rows: InlineKeyboardButton[][] = page.items.map((item) => [
-    { text: `重新預覽 ${item.draftRef}`, callback_data: encodeCallback({ kind: "pending-open", draftRef: item.draftRef }) },
+    {
+      text: `重新預覽 ${item.draftRef}`,
+      callback_data: encodeCallback({ kind: "pending-open", draftRef: item.draftRef }),
+    },
     { text: "封存", callback_data: encodeCallback({ kind: "archive", draftRef: item.draftRef }) },
   ]);
   if (page.totalPages > 1) {

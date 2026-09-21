@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { completeDraft, IncompleteDraftSchema } from "../../src/domain/draft.js";
 import { money } from "../../src/domain/money.js";
-import {
-  incompleteDraftWithPendingCategory,
-  incompleteLunchDraft,
-} from "../fixtures/drafts.js";
+import { incompleteDraftWithPendingCategory, incompleteLunchDraft } from "../fixtures/drafts.js";
 
 describe("completeDraft", () => {
   it("upgrades to a confirmable draft once the amount arrives", () => {

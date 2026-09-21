@@ -66,11 +66,7 @@ describe("createBatch", () => {
 
     expect(result.kind).toBe("batch");
     if (result.kind !== "batch") return;
-    expect(result.items.map((item) => item.outcome.kind)).toEqual([
-      "draft",
-      "draft",
-      "incomplete",
-    ]);
+    expect(result.items.map((item) => item.outcome.kind)).toEqual(["draft", "draft", "incomplete"]);
     const third = result.items[2]?.outcome;
     if (third?.kind !== "incomplete") throw new Error("expected incomplete outcome");
     expect(third.draft.pendingFields.map((field) => field.field)).toEqual(["category"]);
@@ -106,8 +102,9 @@ describe("createBatch", () => {
 
   it("rejects the whole message when it exceeds the segment limit", async () => {
     const { dependencies, repository } = setup();
-    const text = Array.from({ length: MAX_SEGMENTS + 1 }, (_, index) =>
-      `午餐 ${String(index + 1)}`,
+    const text = Array.from(
+      { length: MAX_SEGMENTS + 1 },
+      (_, index) => `午餐 ${String(index + 1)}`,
     ).join("，");
 
     const result = await createBatch({ ...baseCommand, text }, dependencies);

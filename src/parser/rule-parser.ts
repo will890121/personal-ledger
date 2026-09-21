@@ -4,11 +4,7 @@ import {
   type TransactionDraft,
 } from "../domain/ledger.js";
 import { Decimal } from "decimal.js";
-import type {
-  ParseField,
-  PartialAllocation,
-  PartialDraft,
-} from "../domain/draft.js";
+import type { ParseField, PartialAllocation, PartialDraft } from "../domain/draft.js";
 import { money, type Money } from "../domain/money.js";
 import type { Account, Category, Merchant } from "../domain/reference-data.js";
 

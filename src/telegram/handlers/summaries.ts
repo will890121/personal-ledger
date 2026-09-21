@@ -20,5 +20,4 @@ export function registerSummaryHandlers(bot: Bot, dependencies: LedgerBotDepende
     });
     await context.reply(formatSummary("本月摘要", summary));
   });
-
 }

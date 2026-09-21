@@ -62,9 +62,7 @@ describe("draft routing", () => {
     const draftRef = firstDraftRef(repository);
     await bot.handleUpdate(messageUpdate({ updateId: 2, text: "120" }));
 
-    await bot.handleUpdate(
-      callbackUpdate({ updateId: 3, data: `v:${draftRef}:120` }),
-    );
+    await bot.handleUpdate(callbackUpdate({ updateId: 3, data: `v:${draftRef}:120` }));
 
     const record = await repository.getDraftRecord({ ownerId: "123", draftRef });
     expect(record?.status).toBe("awaiting_confirmation");
