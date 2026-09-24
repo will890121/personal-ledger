@@ -1587,11 +1587,25 @@ Expected: FAIL，代墊配置沒有產生。
     if (!shell) return incomplete(context, text, ["category"], { ...references });
 
     if (share.kind === "not_divisible") {
+      // 依人數產生 N−1 筆代墊 placeholder。只產生一筆會讓「三個人平分」補完金額後
+      // 少算一個人的欠款，個人負擔也隨之多算——而且不會有任何測試抓到。
+      const placeholders = Array.from({ length: share.participants - 1 }, (_, index) => ({
+        ...shell,
+        allocationId:
+          context.advanceAllocationIds?.[index] ??
+          `${context.allocationId}-advance-${String(index)}`,
+        purpose: "advance" as const,
+        ...(matchingReferences(share.names[index] ?? "", context.counterparties ?? [])[0]
+          ? {
+              counterpartyId: matchingReferences(
+                share.names[index] ?? "",
+                context.counterparties ?? [],
+              )[0]?.counterpartyId,
+            }
+          : {}),
+      }));
       return incomplete(context, text, ["advanceShare"], {
-        allocations: [
-          { ...shell, amount },
-          { ...shell, allocationId: context.advanceAllocationIds?.[0] ?? `${context.allocationId}-advance`, purpose: "advance" },
-        ],
+        allocations: [{ ...shell, amount }, ...placeholders],
         ...references,
       });
     }
@@ -1765,7 +1779,9 @@ Expected: FAIL，追問訊息沒有交易對象欄位。
 
 `handlers/drafts.ts` 的文字回覆路徑依待補欄位分派：`amount` 與 `advanceShare` 視為金額；`counterparty` 則把輸入文字當成 `proposedName` 寫回草稿並重發追問。`c:` callback 呼叫 `upsertCounterparty` 後，以新建立的 ID 呼叫 `applyAnswer`。
 
-`create-batch.ts` 與 `answer-draft.ts` 的依賴需要能取得 `referenceRepository`，`answerDraft` 的 `AnswerDraftDependencies` 新增 `referenceRepository`。
+`create-batch.ts` 的 `candidatesFor` 需補上 `counterparty` 分支（候選為啟用中的交易對象），否則候選按鈕無法產生。
+
+**`answerDraft` 不需要 `referenceRepository`。** 建立交易對象是在 `drafts.ts` 的 `create-counterparty` callback 裡完成的：先 `upsertCounterparty` 取得 ID，再把該 ID 當成一般的 reference 答案傳給 `applyAnswer`。讓應用層的 `answerDraft` 認識參照儲存庫只會多一條無人使用的依賴。
 
 - [ ] **Step 4：執行測試確認通過**
 
