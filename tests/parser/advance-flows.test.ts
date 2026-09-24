@@ -61,6 +61,33 @@ describe("advance parsing", () => {
     expect(result.fields).toEqual(["advanceShare"]);
   });
 
+  it("produces one placeholder per other participant when three people split unevenly", () => {
+    const result = parseTransaction("午餐 1000，三個人平分", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["advanceShare"]);
+    // 1 筆個人支出 + 2 筆代墊 placeholder（三人平分，扣掉自己還有兩人）。
+    expect(result.partial.allocations).toHaveLength(3);
+    expect(result.partial.allocations[0]?.purpose).toBe("expense");
+    expect(result.partial.allocations[1]?.purpose).toBe("advance");
+    expect(result.partial.allocations[2]?.purpose).toBe("advance");
+  });
+
+  it("produces one placeholder per other participant when four people split unevenly", () => {
+    const result = parseTransaction("午餐 999，四個人平分", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["advanceShare"]);
+    // 1 筆個人支出 + 3 筆代墊 placeholder（四人平分，扣掉自己還有三人）。
+    expect(result.partial.allocations).toHaveLength(4);
+    expect(result.partial.allocations[0]?.purpose).toBe("expense");
+    expect(result.partial.allocations[1]?.purpose).toBe("advance");
+    expect(result.partial.allocations[2]?.purpose).toBe("advance");
+    expect(result.partial.allocations[3]?.purpose).toBe("advance");
+  });
+
   it("marks a credit card advance as not affecting available funds", () => {
     const result = parseTransaction("午餐 1260 國泰卡，朋友欠一半", {
       ...context,

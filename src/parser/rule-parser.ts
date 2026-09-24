@@ -316,15 +316,24 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
     if (!shell) return incomplete(context, text, ["category"], { ...references });
 
     if (share.kind === "not_divisible") {
+      // 依人數產生 N−1 筆代墊 placeholder。只產生一筆會讓「三個人平分」補完金額後
+      // 少算一個人的欠款，個人負擔也隨之多算——而且不會有任何測試抓到。
+      const placeholders = Array.from({ length: share.participants - 1 }, (_, index) => {
+        const counterparty = matchingReferences(
+          share.names[index] ?? "",
+          context.counterparties ?? [],
+        )[0];
+        return {
+          ...shell,
+          allocationId:
+            context.advanceAllocationIds?.[index] ??
+            `${context.allocationId}-advance-${String(index)}`,
+          purpose: "advance" as const,
+          ...(counterparty ? { counterpartyId: counterparty.counterpartyId } : {}),
+        };
+      });
       return incomplete(context, text, ["advanceShare"], {
-        allocations: [
-          { ...shell, amount },
-          {
-            ...shell,
-            allocationId: context.advanceAllocationIds?.[0] ?? `${context.allocationId}-advance`,
-            purpose: "advance",
-          },
-        ],
+        allocations: [{ ...shell, amount }, ...placeholders],
         ...references,
       });
     }
