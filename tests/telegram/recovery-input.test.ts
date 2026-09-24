@@ -67,10 +67,21 @@ describe("recovery typed as free text", () => {
     expect(repository.drafts.size).toBe(1);
   });
 
-  it("records a recovery phrased with the 收到 prefix and a 還 keyword", async () => {
+  it("records a recovery phrased with the 收到 prefix and no 還 keyword", async () => {
     const { bot, calls, repository } = harnessWithAdvances();
 
-    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "收到小明還 300" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "收到小明 300" }));
+
+    const text = getText(calls.at(-1));
+    expect(text).toContain("總金額：TWD 300");
+    expect(text).toContain("代墊收回");
+    expect(repository.drafts.size).toBe(1);
+  });
+
+  it("parses the name correctly when the sentence uses 還我", async () => {
+    const { bot, calls, repository } = harnessWithAdvances();
+
+    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "小明還我 300" }));
 
     const text = getText(calls.at(-1));
     expect(text).toContain("總金額：TWD 300");

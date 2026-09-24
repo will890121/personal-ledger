@@ -79,19 +79,27 @@ export function parseShare(text: string, total: string): ShareResult {
   return { kind: "split", participants, names, share: shares.toString() };
 }
 
-// 「小明還 300」「收到小明 300」：整串錨定，避免「小明還欠我錢」這類敘述
-// 誤判成回收語句（結尾必須是純數字金額）。對象名稱須與交易對象完全相符才觸發，
-// 找不到對象時回傳 null，交由呼叫端落回一般支出解析。
-const REPAYMENT_PATTERN = /^(?:收到\s*)?(.+?)\s*(?:還|還我|歸還)\s*([0-9]+(?:\.[0-9]+)?)$/;
+// 兩種寫法各自錨定整串：`小明還 300`（含還字）與 `收到小明 300`（收到前綴、
+// 不需還字）。結尾都必須是純數字金額，避免「小明還欠我錢」這類敘述誤判成
+// 回收語句。第一條的替代順序把「還我」「歸還」排在「還」之前，否則
+// 「小明還我 300」會被「還」先吃掉、名字變成「小明」而剩下「我 300」對不上。
+const REPAYMENT_PATTERNS = [
+  /^(.+?)\s*(?:還我|歸還|還)\s*([0-9]+(?:\.[0-9]+)?)$/,
+  /^收到\s*(.+?)\s*([0-9]+(?:\.[0-9]+)?)$/,
+];
 
 export function parseRepayment(
   text: string,
   counterparties: readonly Counterparty[],
 ): { counterpartyId: string; amount: string } | null {
-  const match = REPAYMENT_PATTERN.exec(text.trim());
-  if (!match) return null;
-  const name = (match[1] ?? "").trim();
-  const counterparty = counterparties.find((item) => item.name === name);
-  if (!counterparty) return null;
-  return { counterpartyId: counterparty.counterpartyId, amount: match[2] ?? "" };
+  const trimmed = text.trim();
+  for (const pattern of REPAYMENT_PATTERNS) {
+    const match = pattern.exec(trimmed);
+    if (!match) continue;
+    const name = (match[1] ?? "").trim();
+    const counterparty = counterparties.find((item) => item.name === name);
+    if (!counterparty) return null;
+    return { counterpartyId: counterparty.counterpartyId, amount: match[2] ?? "" };
+  }
+  return null;
 }
