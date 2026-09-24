@@ -40,6 +40,8 @@ export class FakeLedgerRepository implements LedgerRepository {
   public readonly records = new Map<string, FakeDraftRecord>();
   public readonly batches = new Map<string, BatchInput>();
   public readonly transactions = new Map<string, ConfirmedTransaction>();
+  // 依插入順序保存稽核事件，供 listAuditEvents 依 ownerId/transactionId 過濾後回傳。
+  public readonly auditEvents: AuditEvent[] = [];
   private refCounter = 0;
   private sequence = 0;
 
@@ -254,17 +256,35 @@ export class FakeLedgerRepository implements LedgerRepository {
         item.ownerId === command.ownerId && item.transactionId === command.transactionId,
     );
     if (!current) return Promise.reject(new Error("transaction not found for owner"));
+    const before = current[1];
+    // 與 SqliteLedgerRepository 一致的樂觀鎖：before.updatedAt 若缺席則退回 confirmedAt。
+    if ((before.updatedAt ?? before.confirmedAt) !== command.expectedUpdatedAt) {
+      return Promise.reject(new Error("stale transaction update"));
+    }
     const updated = ConfirmedTransactionSchema.parse({
       ...command.replacement,
       updatedAt: command.changedAt,
     });
     this.transactions.set(current[0], updated);
+    this.auditEvents.push({
+      auditEventId: command.auditEventId,
+      ownerId: command.ownerId,
+      transactionId: command.transactionId,
+      sourceEventId: command.sourceEventId,
+      action: "transaction_updated",
+      before,
+      after: updated,
+      createdAt: command.changedAt,
+    });
     return Promise.resolve(updated);
   }
 
   public softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction> {
     return this.getTransaction(command.ownerId, command.transactionId).then((current) => {
       if (!current) throw new Error("transaction not found for owner");
+      if ((current.updatedAt ?? current.confirmedAt) !== command.expectedUpdatedAt) {
+        throw new Error("stale transaction update");
+      }
       if (this.countRecoveries(command.transactionId) > 0) {
         throw new Error("advance still has recoveries");
       }
@@ -275,6 +295,16 @@ export class FakeLedgerRepository implements LedgerRepository {
         deletedAt: command.changedAt,
       });
       this.transactions.set(current.requestId, deleted);
+      this.auditEvents.push({
+        auditEventId: command.auditEventId,
+        ownerId: command.ownerId,
+        transactionId: command.transactionId,
+        sourceEventId: command.sourceEventId,
+        action: "transaction_deleted",
+        before: current,
+        after: deleted,
+        createdAt: command.changedAt,
+      });
       return deleted;
     });
   }
@@ -356,8 +386,12 @@ export class FakeLedgerRepository implements LedgerRepository {
   public unlinkTransaction(): Promise<void> {
     return Promise.resolve();
   }
-  public listAuditEvents(): Promise<AuditEvent[]> {
-    return Promise.resolve([]);
+  public listAuditEvents(ownerId: string, transactionId: string): Promise<AuditEvent[]> {
+    return Promise.resolve(
+      this.auditEvents.filter(
+        (event) => event.ownerId === ownerId && event.transactionId === transactionId,
+      ),
+    );
   }
 
   public cancelDraft(draftId: string): Promise<TransactionDraft> {
