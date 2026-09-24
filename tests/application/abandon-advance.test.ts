@@ -106,10 +106,7 @@ describe("abandonAdvance", () => {
       allocations.filter((item) => item.purpose === "expense").map((item) => item.amount.amount),
     ).toContain("330");
     // 專案禁止原生浮點數運算，改用 Decimal 加總驗證配置金額合計。
-    const total = allocations.reduce(
-      (sum, item) => sum.plus(item.amount.amount),
-      new Decimal(0),
-    );
+    const total = allocations.reduce((sum, item) => sum.plus(item.amount.amount), new Decimal(0));
     expect(total.toString()).toBe(result.transaction.amount.amount);
   });
 

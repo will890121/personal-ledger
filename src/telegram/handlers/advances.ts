@@ -33,11 +33,7 @@ export function shortAdvanceRef(id: string): string {
 
 async function persistRef(dependencies: LedgerBotDependencies, id: string): Promise<string> {
   const ref = shortAdvanceRef(id);
-  await dependencies.repository.setSetting(
-    dependencies.ownerId,
-    `${REF_SETTING_PREFIX}${ref}`,
-    id,
-  );
+  await dependencies.repository.setSetting(dependencies.ownerId, `${REF_SETTING_PREFIX}${ref}`, id);
   return ref;
 }
 

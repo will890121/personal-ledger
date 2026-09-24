@@ -18,8 +18,8 @@ function parseKind(segment: string, index: number): ParseResult["kind"] {
 }
 
 describe("parser corpus", () => {
-  it("covers at least twenty anonymised inputs", () => {
-    expect(parserCorpus.length).toBeGreaterThanOrEqual(20);
+  it("covers at least twenty-five anonymised inputs", () => {
+    expect(parserCorpus.length).toBeGreaterThanOrEqual(25);
   });
 
   it.each(parserCorpus)("parses $input consistently", (testCase) => {

@@ -11,7 +11,11 @@ export type ShareResult =
       readonly share: string;
     }
   | { readonly kind: "explicit"; readonly shares: readonly { name: string; amount: string }[] }
-  | { readonly kind: "not_divisible"; readonly participants: number; readonly names: readonly string[] };
+  | {
+      readonly kind: "not_divisible";
+      readonly participants: number;
+      readonly names: readonly string[];
+    };
 
 const CHINESE_DIGITS = new Map([
   ["一", 1],

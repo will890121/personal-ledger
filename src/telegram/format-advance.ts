@@ -50,9 +50,7 @@ export function formatAdvances(
   }
   if (totalPages > 1) {
     rows.push([
-      ...(page > 0
-        ? [{ text: "上一頁", callback_data: `advances-page:${String(page - 1)}` }]
-        : []),
+      ...(page > 0 ? [{ text: "上一頁", callback_data: `advances-page:${String(page - 1)}` }] : []),
       ...(page < totalPages - 1
         ? [{ text: "下一頁", callback_data: `advances-page:${String(page + 1)}` }]
         : []),

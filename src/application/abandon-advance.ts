@@ -18,7 +18,11 @@ export interface AbandonAdvanceDependencies {
 }
 
 export type AbandonAdvanceResult =
-  | { readonly kind: "abandoned"; readonly transaction: ConfirmedTransaction; readonly amount: string }
+  | {
+      readonly kind: "abandoned";
+      readonly transaction: ConfirmedTransaction;
+      readonly amount: string;
+    }
   | { readonly kind: "not_found" }
   | { readonly kind: "nothing_to_abandon" };
 

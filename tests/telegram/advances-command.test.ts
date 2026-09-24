@@ -153,9 +153,7 @@ describe("/advances", () => {
     // sendMessage 回應的 message_id 由 harness 依序遞增，取得剛送出的那則訊息編號。
     const sentCount = sentMessages(calls).length;
 
-    await bot.handleUpdate(
-      replyUpdate({ updateId: 12, text: "300", replyToMessageId: sentCount }),
-    );
+    await bot.handleUpdate(replyUpdate({ updateId: 12, text: "300", replyToMessageId: sentCount }));
 
     const text = getText(calls.at(-1));
     expect(text).toContain("總金額：TWD 300");
@@ -185,9 +183,7 @@ describe("/advances", () => {
     await bot.handleUpdate(callbackUpdate({ updateId: 11, data: `ar:${counterpartyRef}` }));
     const sentCount = sentMessages(calls).length;
 
-    await bot.handleUpdate(
-      replyUpdate({ updateId: 12, text: "300", replyToMessageId: sentCount }),
-    );
+    await bot.handleUpdate(replyUpdate({ updateId: 12, text: "300", replyToMessageId: sentCount }));
 
     const text = getText(calls.at(-1));
     expect(text).not.toContain("要把 300 填到哪一筆");
@@ -209,9 +205,7 @@ describe("/advances", () => {
     await bot.handleUpdate(messageUpdate({ updateId: 10, text: "/advances" }));
     await bot.handleUpdate(callbackUpdate({ updateId: 11, data: `aa:${allocationRef}` }));
 
-    await bot.handleUpdate(
-      callbackUpdate({ updateId: 12, data: `aa-confirm:${allocationRef}` }),
-    );
+    await bot.handleUpdate(callbackUpdate({ updateId: 12, data: `aa-confirm:${allocationRef}` }));
 
     const edit = calls.at(-1);
     expect(edit?.method).toBe("editMessageText");

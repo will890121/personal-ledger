@@ -33,9 +33,7 @@ export async function listAdvances(
     .map(([counterpartyId, items]) => ({
       counterpartyId,
       name: names.get(counterpartyId) ?? counterpartyId,
-      total: items
-        .reduce((sum, item) => sum.plus(item.outstanding), new Decimal(0))
-        .toString(),
+      total: items.reduce((sum, item) => sum.plus(item.outstanding), new Decimal(0)).toString(),
       items,
     }))
     .sort(

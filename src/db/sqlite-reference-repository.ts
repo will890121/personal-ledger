@@ -92,7 +92,12 @@ export class SqliteReferenceRepository implements ReferenceRepository {
       .prepare(
         "SELECT counterparty_id, owner_id, name, active FROM counterparties WHERE owner_id = ? AND active = 1 ORDER BY name",
       )
-      .all(ownerId) as { counterparty_id: string; owner_id: string; name: string; active: number }[];
+      .all(ownerId) as {
+      counterparty_id: string;
+      owner_id: string;
+      name: string;
+      active: number;
+    }[];
     return Promise.resolve(
       rows.map((row) =>
         CounterpartySchema.parse({

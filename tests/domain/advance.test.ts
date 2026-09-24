@@ -43,9 +43,7 @@ describe("computeOutstanding", () => {
   });
 
   it("sorts oldest first", () => {
-    const reversedRows = [rows[1], rows[0]].filter(
-      (row): row is AdvanceRow => row !== undefined,
-    );
+    const reversedRows = [rows[1], rows[0]].filter((row): row is AdvanceRow => row !== undefined);
     const result = computeOutstanding(reversedRows, []);
 
     expect(result.map((item) => item.allocationId)).toEqual(["A1", "A2"]);

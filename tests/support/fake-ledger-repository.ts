@@ -322,10 +322,7 @@ export class FakeLedgerRepository implements LedgerRepository {
       if (transaction.status !== "confirmed") continue;
       if (ownerId !== undefined && transaction.ownerId !== ownerId) continue;
       for (const allocation of transaction.allocations) {
-        if (
-          allocation.recoversAllocationId &&
-          allocationIds.has(allocation.recoversAllocationId)
-        ) {
+        if (allocation.recoversAllocationId && allocationIds.has(allocation.recoversAllocationId)) {
           total += 1;
         }
       }

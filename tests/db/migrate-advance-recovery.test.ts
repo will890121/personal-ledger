@@ -24,8 +24,8 @@ describe("migration 0005", () => {
     const database = openMemoryDatabase();
     migrate(database);
 
-    expect(database.prepare("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual(
-      [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }],
-    );
+    expect(
+      database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
   });
 });

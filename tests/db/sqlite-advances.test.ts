@@ -182,9 +182,7 @@ describe("advance queries", () => {
     // 這與既有的 tests/db/sqlite-ledger-repository.test.ts（見 "stale transaction update" /
     // "transaction not found for owner" 案例）採用相同的同步 throw 斷言慣例，
     // 而非 `await expect(...).rejects.toThrow(...)`。
-    expect(() => repository.softDeleteTransaction(command)).toThrow(
-      "advance still has recoveries",
-    );
+    expect(() => repository.softDeleteTransaction(command)).toThrow("advance still has recoveries");
   });
 
   it("counts recoveries pointing at a transaction", async () => {
