@@ -120,4 +120,152 @@ describe("TransactionDraftSchema", () => {
       ),
     ).toThrow("credit expense cannot have a destination account");
   });
+
+  it("accepts a cash advance alongside the personal share", () => {
+    const advanceBase = {
+      ownerId: "owner-1",
+      requestId: "request-1",
+      sourceEventId: "event-1",
+      draftId: "draft-1",
+      occurredDate: "2026-09-24",
+      status: "awaiting_confirmation" as const,
+    };
+
+    const draft = TransactionDraftSchema.parse({
+      ...advanceBase,
+      amount: { amount: "1260", currency: "TWD" },
+      allocations: [
+        {
+          allocationId: "mine",
+          fundsEffect: "outflow",
+          purpose: "expense",
+          amount: { amount: "630", currency: "TWD" },
+          category: "餐飲",
+        },
+        {
+          allocationId: "theirs",
+          fundsEffect: "outflow",
+          purpose: "advance",
+          amount: { amount: "630", currency: "TWD" },
+          category: "餐飲",
+          counterpartyId: "counterparty-1",
+        },
+      ],
+    });
+
+    expect(draft.allocations).toHaveLength(2);
+  });
+
+  it("accepts a credit card advance", () => {
+    const advanceBase = {
+      ownerId: "owner-1",
+      requestId: "request-1",
+      sourceEventId: "event-1",
+      draftId: "draft-1",
+      occurredDate: "2026-09-24",
+      status: "awaiting_confirmation" as const,
+    };
+
+    expect(() =>
+      TransactionDraftSchema.parse({
+        ...advanceBase,
+        amount: { amount: "600", currency: "TWD" },
+        allocations: [
+          {
+            allocationId: "theirs",
+            fundsEffect: "none",
+            purpose: "advance",
+            amount: { amount: "600", currency: "TWD" },
+            category: "餐飲",
+            counterpartyId: "counterparty-1",
+          },
+        ],
+        accountFromId: "card-1",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects an advance without a counterparty", () => {
+    const advanceBase = {
+      ownerId: "owner-1",
+      requestId: "request-1",
+      sourceEventId: "event-1",
+      draftId: "draft-1",
+      occurredDate: "2026-09-24",
+      status: "awaiting_confirmation" as const,
+    };
+
+    expect(() =>
+      TransactionDraftSchema.parse({
+        ...advanceBase,
+        amount: { amount: "630", currency: "TWD" },
+        allocations: [
+          {
+            allocationId: "theirs",
+            fundsEffect: "outflow",
+            purpose: "advance",
+            amount: { amount: "630", currency: "TWD" },
+            category: "餐飲",
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a recovery that points at an advance allocation", () => {
+    const advanceBase = {
+      ownerId: "owner-1",
+      requestId: "request-1",
+      sourceEventId: "event-1",
+      draftId: "draft-1",
+      occurredDate: "2026-09-24",
+      status: "awaiting_confirmation" as const,
+    };
+
+    expect(() =>
+      TransactionDraftSchema.parse({
+        ...advanceBase,
+        amount: { amount: "300", currency: "TWD" },
+        allocations: [
+          {
+            allocationId: "recovery",
+            fundsEffect: "inflow",
+            purpose: "advance_recovery",
+            amount: { amount: "300", currency: "TWD" },
+            category: "餐飲",
+            counterpartyId: "counterparty-1",
+            recoversAllocationId: "theirs",
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a recovery reference on a non recovery allocation", () => {
+    const advanceBase = {
+      ownerId: "owner-1",
+      requestId: "request-1",
+      sourceEventId: "event-1",
+      draftId: "draft-1",
+      occurredDate: "2026-09-24",
+      status: "awaiting_confirmation" as const,
+    };
+
+    expect(() =>
+      TransactionDraftSchema.parse({
+        ...advanceBase,
+        amount: { amount: "300", currency: "TWD" },
+        allocations: [
+          {
+            allocationId: "mine",
+            fundsEffect: "outflow",
+            purpose: "expense",
+            amount: { amount: "300", currency: "TWD" },
+            category: "餐飲",
+            recoversAllocationId: "theirs",
+          },
+        ],
+      }),
+    ).toThrow();
+  });
 });

@@ -30,6 +30,7 @@ export const AllocationSchema = z.object({
   subcategory: z.string().min(1).optional(),
   counterpartyId: z.string().min(1).optional(),
   note: z.string().trim().min(1).optional(),
+  recoversAllocationId: z.string().min(1).optional(),
 });
 export type Allocation = z.infer<typeof AllocationSchema>;
 
@@ -61,6 +62,9 @@ const supportedAccountingShapes = new Set([
   "inflow:refund",
   "none:refund",
   "outflow:fee",
+  "outflow:advance",
+  "none:advance",
+  "inflow:advance_recovery",
 ]);
 
 function validateAllocations(
@@ -86,6 +90,20 @@ function validateAllocations(
         code: "custom",
         message: "unsupported accounting shape",
         path: ["allocations", index],
+      });
+    }
+    if (allocation.purpose === "advance" && !allocation.counterpartyId) {
+      context.addIssue({
+        code: "custom",
+        message: "advance allocation requires a counterparty",
+        path: ["allocations", index, "counterpartyId"],
+      });
+    }
+    if (allocation.recoversAllocationId && allocation.purpose !== "advance_recovery") {
+      context.addIssue({
+        code: "custom",
+        message: "only an advance recovery may reference an advance allocation",
+        path: ["allocations", index, "recoversAllocationId"],
       });
     }
   }
