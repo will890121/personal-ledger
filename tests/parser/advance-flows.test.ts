@@ -199,4 +199,29 @@ describe("advance parsing", () => {
     });
     expect(result.draft.allocations[0]?.amount.amount).toBe("1260");
   });
+
+  it("builds advance placeholders for an unnamed even split so the intent is not lost", () => {
+    const result = parseTransaction("午餐 999，三個人平分", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["counterparty"]);
+    expect(result.partial.allocations).toHaveLength(3);
+    expect(result.partial.allocations.map((item) => item.amount?.amount)).toEqual([
+      "333",
+      "333",
+      "333",
+    ]);
+  });
+
+  it("leaves advance placeholder amounts undefined when the split does not divide", () => {
+    const result = parseTransaction("午餐 1000，三個人平分", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["advanceShare"]);
+    expect(result.partial.allocations).toHaveLength(3);
+    expect(result.partial.allocations[1]?.amount).toBeUndefined();
+    expect(result.partial.allocations[2]?.amount).toBeUndefined();
+  });
 });

@@ -318,13 +318,18 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
     if (share.kind === "not_divisible") {
       // 依人數產生 N−1 筆代墊 placeholder。只產生一筆會讓「三個人平分」補完金額後
       // 少算一個人的欠款，個人負擔也隨之多算——而且不會有任何測試抓到。
+      // placeholder 不能帶 amount：shell.amount 是交易總額，若直接展開會讓每一筆
+      // placeholder 都背著全額，使用者補完每人負擔後總額會被加倍甚至更多。
+      // 金額留給 applyAdvanceShare 在使用者回答後填入，加總時 undefined 視為 0。
+      const shellWithoutAmount = { ...shell };
+      delete shellWithoutAmount.amount;
       const placeholders = Array.from({ length: share.participants - 1 }, (_, index) => {
         const counterparty = matchingReferences(
           share.names[index] ?? "",
           context.counterparties ?? [],
         )[0];
         return {
-          ...shell,
+          ...shellWithoutAmount,
           allocationId:
             context.advanceAllocationIds?.[index] ??
             `${context.allocationId}-advance-${String(index)}`,
@@ -338,10 +343,16 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
       });
     }
 
+    // 可整除但沒有具名時（逗號列舉，Ruling 4 刻意不當名字），仍要依人數建立代墊
+    // placeholder，否則分帳意圖會整個消失，變成一筆全額的個人支出。§5.3 假設代墊
+    // 配置已經存在，缺的只是 counterpartyId，所以這裡固定產生 N−1 筆、都帶上金額。
     const requested =
       share.kind === "explicit"
         ? share.shares
-        : share.names.map((name) => ({ name, amount: share.share }));
+        : Array.from({ length: share.participants - 1 }, (_, index) => ({
+            name: share.names[index] ?? "",
+            amount: share.share,
+          }));
     const expected = share.kind === "explicit" ? requested.length : share.participants - 1;
 
     const resolved = requested.map((item) => ({
