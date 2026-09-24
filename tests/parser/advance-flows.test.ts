@@ -158,4 +158,18 @@ describe("advance parsing", () => {
     if (result.kind !== "missing_fields") return;
     expect(result.fields).toEqual(["amount"]);
   });
+
+  it("treats a single amount owed entirely by a counterparty as a full advance", () => {
+    const result = parseTransaction("午餐 朋友欠1260", context);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.amount.amount).toBe("1260");
+    expect(result.draft.allocations).toHaveLength(1);
+    expect(result.draft.allocations[0]).toMatchObject({
+      purpose: "advance",
+      counterpartyId: "friend",
+    });
+    expect(result.draft.allocations[0]?.amount.amount).toBe("1260");
+  });
 });
