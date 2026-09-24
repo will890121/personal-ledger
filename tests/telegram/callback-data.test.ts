@@ -15,6 +15,9 @@ const samples: CallbackAction[] = [
   { kind: "pending-page", status: "confirm", page: 0 },
   { kind: "pending-open", draftRef: "a7b2c9e4" },
   { kind: "archive", draftRef: "a7b2c9e4" },
+  { kind: "create-counterparty", draftRef: "a7b2c9e4" },
+  { kind: "advance-recover", ref: "a7b2c9e4" },
+  { kind: "advance-abandon", ref: "ffffffff" },
 ];
 
 describe("callback data", () => {

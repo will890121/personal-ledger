@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 
 import type { LedgerBotDependencies } from "./dependencies.js";
+import { registerAdvanceHandlers } from "./handlers/advances.js";
 import { registerDraftHandlers } from "./handlers/drafts.js";
 import { registerPendingHandlers } from "./handlers/pending.js";
 import { registerSummaryHandlers } from "./handlers/summaries.js";
@@ -26,6 +27,7 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
   registerTransactionHandlers(bot, dependencies);
   registerSummaryHandlers(bot, dependencies);
   registerPendingHandlers(bot, dependencies);
+  registerAdvanceHandlers(bot, dependencies);
   registerDraftHandlers(bot, dependencies);
 
   return bot;

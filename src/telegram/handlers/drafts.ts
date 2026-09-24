@@ -13,6 +13,7 @@ import { decodeCallback, encodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
 import { formatPreview } from "../format-preview.js";
 import { formatBatchSummary, formatPrompt } from "../format-prompt.js";
+import { handleRecoveryReply } from "./advances.js";
 
 const AMOUNT_ONLY = /^\d+(?:\.\d+)?$/;
 
@@ -206,6 +207,10 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
   bot.on("message:text", async (context) => {
     const replyTo = context.message.reply_to_message;
     if (replyTo) {
+      // 代墊回收金額的回覆必須綁定「收到多少？」那則發問訊息，並且排在
+      // 草稿回覆與下面的純數字攔截之前處理，否則會被那條規則劫走。
+      if (await handleRecoveryReply(context, dependencies)) return;
+
       const record = await dependencies.repository.getDraftRecord({
         previewChatId: String(context.chat.id),
         previewMessageId: String(replyTo.message_id),
