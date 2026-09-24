@@ -1166,7 +1166,36 @@ git commit -m "feat: expose counterparties in the reference snapshot"
 **Files:**
 
 - Modify: `src/domain/draft.ts`、`src/application/answer-draft.ts`
+- Modify: `src/telegram/callback-data.ts`、`src/telegram/format-prompt.ts`（僅補窮盡對應表，見下方說明）
 - Test: `tests/domain/draft.test.ts`、`tests/application/answer-draft.test.ts`
+
+**為什麼要動兩個 telegram 檔案：** `ParseField` 有兩處窮盡對應表——`callback-data.ts` 的 `fieldCodes: Record<ParseField, string>` 與 `format-prompt.ts` 的 `fieldLabels`。新增 enum 值卻不補這兩張表，typecheck、lint 與 build 會立刻失敗，分支在後續任務期間一直是紅的。本任務只補最小條目讓專案保持綠燈，**追問訊息的行為留給 Task 9**：
+
+```ts
+// src/telegram/callback-data.ts
+const fieldCodes: Record<ParseField, string> = {
+  amount: "amt",
+  category: "cat",
+  account: "acc",
+  refundTarget: "ref",
+  purpose: "pur",
+  counterparty: "cpy",
+  advanceShare: "shr",
+};
+```
+
+```ts
+// src/telegram/format-prompt.ts
+const fieldLabels = {
+  amount: "金額",
+  category: "分類",
+  account: "帳戶",
+  refundTarget: "退款原交易",
+  purpose: "用途",
+  counterparty: "交易對象",
+  advanceShare: "代墊金額",
+} as const;
+```
 
 **Interfaces:**
 
@@ -1340,8 +1369,48 @@ Expected: PASS。
 
 - [ ] **Step 5：提交**
 
+在 `tests/application/answer-draft.test.ts` 追加兩個測試，覆蓋 `patchFor` 的新分派：
+
+```ts
+it("routes a counterparty answer to the counterparty patch", async () => {
+  const { repository, dependencies } = await seedIncompleteAdvanceDraft();
+
+  const result = await answerDraft(
+    {
+      ...amountAnswer,
+      field: "counterparty",
+      value: { kind: "reference", id: "counterparty-1", label: "小明" },
+      rawText: "小明",
+    },
+    dependencies,
+  );
+
+  expect(result.kind).toBe("draft");
+  const record = await repository.getDraftRecord({ draftId: "draft-1" });
+  expect(record?.draft?.allocations[1]?.counterpartyId).toBe("counterparty-1");
+});
+
+it("rejects a non-numeric advance share", async () => {
+  const { dependencies } = await seedIncompleteAdvanceDraft();
+
+  const result = await answerDraft(
+    {
+      ...amountAnswer,
+      field: "advanceShare",
+      value: { kind: "amount", text: "一半" },
+      rawText: "一半",
+    },
+    dependencies,
+  );
+
+  expect(result).toEqual({ kind: "invalid", reason: "amount_not_numeric" });
+});
+```
+
+`seedIncompleteAdvanceDraft` 比照既有的 `seedIncompleteLunchDraft`，建立一筆含個人支出與代墊兩個配置、待補欄位為 counterparty 的不完整草稿。
+
 ```bash
-git add src/domain/draft.ts src/application/answer-draft.ts tests/domain/draft.test.ts tests/application/answer-draft.test.ts
+git add src/domain/draft.ts src/application/answer-draft.ts src/telegram/callback-data.ts src/telegram/format-prompt.ts tests/domain/draft.test.ts tests/application/answer-draft.test.ts
 git commit -m "feat: support counterparty and advance share follow-ups"
 ```
 
