@@ -51,20 +51,6 @@ function extractNames(text: string): string[] {
       match = pattern.exec(text);
     }
   }
-
-  // Extract names listed with commas before the count pattern (e.g., "小明，小華，三個人平分")
-  const countMatch = COUNT_PATTERN.exec(text);
-  if (countMatch) {
-    const beforeCount = text.substring(0, countMatch.index);
-    const commaNamePattern = /，([^，,、\s]+)/g;
-    let commaMatch = commaNamePattern.exec(beforeCount);
-    while (commaMatch) {
-      const name = (commaMatch[1] ?? "").trim();
-      if (name && !SELF_WORDS.has(name) && !/^[0-9.]+$/.test(name)) names.add(name);
-      commaMatch = commaNamePattern.exec(beforeCount);
-    }
-  }
-
   return [...names];
 }
 

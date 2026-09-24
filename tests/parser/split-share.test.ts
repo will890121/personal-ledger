@@ -23,11 +23,13 @@ describe("parseShare", () => {
     });
   });
 
-  it("reads a three way split with two names", () => {
+  it("reads a three way split and leaves unparseable names to the follow-up", () => {
+    // 逗號列舉的名字不在四種明確寫法內（X欠、X要還、X該給、幫X付）
+    // 應由應用層追問
     expect(parseShare("聚餐 1260，小明，小華，三個人平分", "1260")).toEqual({
       kind: "split",
       participants: 3,
-      names: ["小明", "小華"],
+      names: [],
       share: "420",
     });
   });
@@ -61,5 +63,12 @@ describe("parseShare", () => {
     expect(result.kind).toBe("split");
     if (result.kind !== "split") return;
     expect(result.names).not.toContain("1260");
+  });
+
+  it("only takes names from the four explicit forms", () => {
+    expect(parseShare("聚餐 1260，現金支付，三個人平分", "1260")).toMatchObject({ names: [] });
+    expect(parseShare("聚餐 1260，幫小明付，三個人平分", "1260")).toMatchObject({
+      names: ["小明"],
+    });
   });
 });
