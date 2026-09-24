@@ -86,8 +86,22 @@ export function formatPrompt(
     return acc;
   }, []);
 
+  // §5.4：counterparty 的追問必須同時提供既有對象的按鈕與「回覆本訊息輸入新名稱」
+  // 兩條路。尚未建立任何交易對象的帳本候選清單必定是空的，少了這句指示，使用者
+  // 看到的是一則沒有任何出路的訊息。
+  const lines = [`待補${fieldLabels[pending.field]}：${segment}`];
+  if (pending.field === "counterparty") {
+    lines.push(
+      buttons.length > 0
+        ? "請選擇，或回覆這則訊息並輸入新的交易對象名稱。"
+        : "請回覆這則訊息並輸入新的交易對象名稱。",
+    );
+  } else {
+    lines.push("請選擇：");
+  }
+
   return {
-    text: [`待補${fieldLabels[pending.field]}：${segment}`, "請選擇："].join("\n"),
+    text: lines.join("\n"),
     replyMarkup: { inline_keyboard: rows },
   };
 }

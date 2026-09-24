@@ -242,3 +242,80 @@ describe("advance parsing", () => {
     expect(result.fields).toEqual(["advanceShare"]);
   });
 });
+
+// 「午餐」是解析器唯一硬編碼分類的詞。分帳測試全用它，等於從沒驗過「分類未知」
+// 這條路——AC-11 的官方語句「聚餐」正是走這條，而它原本會落到「無法解析」。
+describe("advance parsing when the category is unknown", () => {
+  it("keeps the split shell and asks for the category (AC-11)", () => {
+    const result = parseTransaction("聚餐 1260，我先付，朋友欠一半", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category"]);
+    // 配置不得為空：空配置會被 create-batch 降級成「無法解析」，連草稿都不建。
+    expect(result.partial.allocations).toHaveLength(2);
+    expect(result.partial.allocations.map((item) => item.amount?.amount)).toEqual(["630", "630"]);
+    expect(result.partial.allocations.map((item) => item.purpose)).toEqual(["expense", "advance"]);
+    expect(result.partial.allocations[0]).toMatchObject({
+      fundsEffect: "outflow",
+      category: "待分類",
+    });
+    expect(result.partial.allocations[0]?.categoryId).toBeUndefined();
+    expect(result.partial.allocations[1]?.counterpartyId).toBe("friend");
+  });
+
+  it("asks for the category and the counterparty when an explicit share names a stranger", () => {
+    const result = parseTransaction("聚餐 1260，小明欠 630", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category", "counterparty"]);
+    expect(result.partial.allocations.map((item) => item.amount?.amount)).toEqual(["630", "630"]);
+  });
+
+  it("asks for the category alongside the share when the split does not divide", () => {
+    const result = parseTransaction("聚餐 1000，三個人平分", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category", "advanceShare", "counterparty"]);
+    expect(result.partial.allocations).toHaveLength(3);
+    expect(result.partial.allocations[1]?.amount).toBeUndefined();
+  });
+
+  it("splits an unknown category for a known counterparty once the split is exact", () => {
+    const result = parseTransaction("聚餐 600，朋友欠 600", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category"]);
+    // 整筆都是代墊：不產生 0 元的個人配置。
+    expect(result.partial.allocations).toHaveLength(1);
+    expect(result.partial.allocations[0]).toMatchObject({ purpose: "advance" });
+  });
+});
+
+// explicit 前置攔截（Ruling 10）排在金額關卡之前，也因此排到了「退款」與「卡」
+// 兩道關卡之前。同一語意的兩種寫法必須通過同一組關卡，否則刷卡代墊會被誤記成
+// 實際流出（設計 §4.2 要求 none:advance），污染 /today、/month 的實際流出。
+describe("advance parsing goes through the same guards on both paths", () => {
+  it("asks for the account for a card split written either way", () => {
+    const explicit = parseTransaction("午餐 1260 刷卡，朋友欠 630", context);
+    const half = parseTransaction("午餐 1260 刷卡，朋友欠一半", context);
+
+    expect(explicit.kind).toBe("missing_fields");
+    if (explicit.kind !== "missing_fields") return;
+    expect(half.kind).toBe("missing_fields");
+    if (half.kind !== "missing_fields") return;
+    expect(explicit.fields).toEqual(["account"]);
+    expect(explicit.fields).toEqual(half.fields);
+  });
+
+  it("routes a refund with an explicit share to the refund follow-up", () => {
+    const result = parseTransaction("退款 1260，朋友欠 630", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["refundTarget", "category"]);
+  });
+});

@@ -138,6 +138,52 @@ function expenseShell(
   ];
 }
 
+/**
+ * 用途無從判斷、但金額已知時的後援配置殼：留下一筆沒有 categoryId 的「待分類」
+ * 支出配置，使用者補完分類就能升級成草稿。分帳與非分帳兩條路徑共用同一份建構
+ * 方式——分帳路徑少了它，`聚餐 1260，我先付，朋友欠一半` 會因為配置為空而被
+ * create-batch 判成完全無法解析，連草稿都不建（AC-11 直接掛掉）。
+ */
+function fallbackExpenseShell(
+  context: ParseContext,
+  account: Account | undefined,
+  amount?: Money,
+): PartialAllocation {
+  return {
+    allocationId: context.allocationId,
+    fundsEffect: account?.type === "credit_card" ? "none" : "outflow",
+    purpose: "expense",
+    ...(amount ? { amount } : {}),
+    category: "待分類",
+  };
+}
+
+/**
+ * 依「名字＋金額」清單建立代墊配置。explicit（`小明欠 630`）、可整除平分與
+ * 除不盡的 placeholder 三處共用：三者的差別只在金額有沒有值。
+ * 金額未給時必須把殼上的金額拿掉——殼的金額是交易總額，直接沿用會讓每一筆
+ * placeholder 都背著全額，使用者補完每人負擔後總額會被加倍。
+ */
+function advanceAllocations(
+  context: ParseContext,
+  shell: PartialAllocation,
+  shares: readonly { readonly name: string; readonly amount?: string }[],
+): PartialAllocation[] {
+  return shares.map((item, index) => {
+    const counterparty = matchingReferences(item.name, context.counterparties ?? [])[0];
+    const allocation: PartialAllocation = {
+      ...shell,
+      allocationId:
+        context.advanceAllocationIds?.[index] ?? `${context.allocationId}-advance-${String(index)}`,
+      purpose: "advance",
+      ...(counterparty ? { counterpartyId: counterparty.counterpartyId } : {}),
+    };
+    if (item.amount === undefined) delete allocation.amount;
+    else allocation.amount = money(item.amount, "TWD");
+    return allocation;
+  });
+}
+
 function partialOf(
   context: ParseContext,
   text: string,
@@ -167,6 +213,46 @@ function ambiguous(
   candidateIds: readonly string[],
 ): ParseResult {
   return { kind: "ambiguous", field, candidateIds, partial: partialOf(context, text) };
+}
+
+/** 解析到的帳戶／商家參照，兩條支出路徑共用同一份 partial 覆寫。 */
+type ParsedReferences = { readonly accountFromId?: string; readonly merchantId?: string };
+
+function refundGuard(
+  context: ParseContext,
+  text: string,
+  references: ParsedReferences,
+): ParseResult | undefined {
+  if (!text.includes("退款")) return undefined;
+  return incomplete(context, text, ["refundTarget", "category"], { ...references });
+}
+
+function cardWithoutAccountGuard(
+  context: ParseContext,
+  text: string,
+  accounts: readonly Account[],
+  references: ParsedReferences,
+): ParseResult | undefined {
+  if (!text.includes("卡") || accounts.length > 0) return undefined;
+  return incomplete(context, text, ["account"], { ...references });
+}
+
+/**
+ * 「退款」與「提到卡卻沒有可辨識帳戶」這兩道關卡與分帳無關，但對每一條支出
+ * 路徑都必須成立。explicit 前置攔截（Ruling 10）排在金額關卡之前，連帶也排到
+ * 了這兩道關卡之前；不在它的最前面補回來，`午餐 1260 刷卡，朋友欠 630` 會漏掉
+ * 刷卡判斷而入成 outflow:advance，同語意的「朋友欠一半」卻會正確追問帳戶。
+ */
+function expenseGuards(
+  context: ParseContext,
+  text: string,
+  accounts: readonly Account[],
+  references: ParsedReferences,
+): ParseResult | undefined {
+  return (
+    refundGuard(context, text, references) ??
+    cardWithoutAccountGuard(context, text, accounts, references)
+  );
 }
 
 export function parseTransaction(text: string, context: ParseContext): ParseResult {
@@ -245,32 +331,26 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
   // 像「午餐 120 另加 30」這種沒有「欠」等分帳語句的句子，仍交回既有的金額關卡處理。
   const explicitShare = parseShare(text, amounts[0]?.value ?? "0");
   if (explicitShare.kind === "explicit" && amounts.length === explicitShare.shares.length + 1) {
-    const total = money(amounts[0]?.value ?? "", "TWD");
-    const shell = expenseShell(context, text, account, merchant, total)[0];
-    if (!shell) return incomplete(context, text, ["category"], { ...references });
+    const guarded = expenseGuards(context, text, accounts, references);
+    if (guarded) return guarded;
 
-    const advances = explicitShare.shares.map((item, index) => {
-      const counterparty = matchingReferences(item.name, context.counterparties ?? [])[0];
-      return {
-        ...shell,
-        allocationId:
-          context.advanceAllocationIds?.[index] ??
-          `${context.allocationId}-advance-${String(index)}`,
-        purpose: "advance" as const,
-        amount: money(item.amount, "TWD"),
-        ...(counterparty ? { counterpartyId: counterparty.counterpartyId } : {}),
-      };
-    });
+    const total = money(amounts[0]?.value ?? "", "TWD");
+    const matched = expenseShell(context, text, account, merchant, total)[0];
+    const shell = matched ?? fallbackExpenseShell(context, account, total);
+    // 用了後援殼就沒有分類，草稿不能直接成立；把「待補分類」一路帶到底。
+    const pendingCategory: ParseField[] = matched ? [] : ["category"];
+
+    const advances = advanceAllocations(context, shell, explicitShare.shares);
 
     const advanceTotal = advances.reduce(
-      (sum, item) => sum.plus(item.amount.amount),
+      (sum, item) => sum.plus(item.amount?.amount ?? "0"),
       new Decimal(0),
     );
     const personal = new Decimal(total.amount).minus(advanceTotal);
 
     // 代墊合計超過總額：語句自相矛盾，改為追問代墊金額，而不是產生負數配置。
     if (personal.isNegative()) {
-      return incomplete(context, text, ["advanceShare"], {
+      return incomplete(context, text, [...pendingCategory, "advanceShare"], {
         allocations: [{ ...shell, amount: total }, ...advances],
         ...references,
       });
@@ -281,10 +361,16 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
       ? [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances]
       : advances;
 
-    if (advances.some((item) => !item.counterpartyId)) {
-      return incomplete(context, text, ["counterparty"], { allocations, ...references });
+    const missingCounterparty = advances.some((item) => !item.counterpartyId);
+    if (missingCounterparty || pendingCategory.length > 0) {
+      return incomplete(
+        context,
+        text,
+        [...pendingCategory, ...(missingCounterparty ? (["counterparty"] as const) : [])],
+        { allocations, ...references },
+      );
     }
-    return draft(context, text, allocations, references);
+    return draft(context, text, allocations as Allocation[], references);
   }
 
   if (amounts.length !== 1) {
@@ -294,8 +380,8 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
     });
   }
   const amount = money(amounts[0]?.value ?? "", "TWD");
-  if (text.includes("退款"))
-    return incomplete(context, text, ["refundTarget", "category"], { ...references });
+  const refund = refundGuard(context, text, references);
+  if (refund) return refund;
   if (amounts[0]?.signed && text.includes("薪水")) {
     return draft(context, text, [
       {
@@ -307,41 +393,35 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
       },
     ]);
   }
-  if (text.includes("卡") && accounts.length === 0)
-    return incomplete(context, text, ["account"], { ...references });
+  const cardWithoutAccount = cardWithoutAccountGuard(context, text, accounts, references);
+  if (cardWithoutAccount) return cardWithoutAccount;
 
   const share = parseShare(text, amount.amount);
   if (share.kind !== "none") {
-    const shell = expenseShell(context, text, account, merchant, amount)[0];
-    if (!shell) return incomplete(context, text, ["category"], { ...references });
+    const matched = expenseShell(context, text, account, merchant, amount)[0];
+    const shell = matched ?? fallbackExpenseShell(context, account, amount);
+    // 用了後援殼就沒有分類，草稿不能直接成立；把「待補分類」一路帶到底。
+    const pendingCategory: ParseField[] = matched ? [] : ["category"];
 
     if (share.kind === "not_divisible") {
       // 依人數產生 N−1 筆代墊 placeholder。只產生一筆會讓「三個人平分」補完金額後
       // 少算一個人的欠款，個人負擔也隨之多算——而且不會有任何測試抓到。
-      // placeholder 不能帶 amount：shell.amount 是交易總額，若直接展開會讓每一筆
-      // placeholder 都背著全額，使用者補完每人負擔後總額會被加倍甚至更多。
-      // 金額留給 applyAdvanceShare 在使用者回答後填入，加總時 undefined 視為 0。
-      const shellWithoutAmount = { ...shell };
-      delete shellWithoutAmount.amount;
-      const placeholders = Array.from({ length: share.participants - 1 }, (_, index) => {
-        const counterparty = matchingReferences(
-          share.names[index] ?? "",
-          context.counterparties ?? [],
-        )[0];
-        return {
-          ...shellWithoutAmount,
-          allocationId:
-            context.advanceAllocationIds?.[index] ??
-            `${context.allocationId}-advance-${String(index)}`,
-          purpose: "advance" as const,
-          ...(counterparty ? { counterpartyId: counterparty.counterpartyId } : {}),
-        };
-      });
+      // placeholder 不帶金額（由 advanceAllocations 負責移除），金額留給
+      // applyAdvanceShare 在使用者回答後填入，加總時 undefined 視為 0。
+      const placeholders = advanceAllocations(
+        context,
+        shell,
+        Array.from({ length: share.participants - 1 }, (_, index) => ({
+          name: share.names[index] ?? "",
+        })),
+      );
       // 一次宣告所有已知缺漏：名字不足時 placeholder 沒有 counterpartyId，
       // 答完 advanceShare 之後還得繼續追問 counterparty，不能等到那時候才發現。
-      const fields: ParseField[] = placeholders.some((item) => !item.counterpartyId)
-        ? ["advanceShare", "counterparty"]
-        : ["advanceShare"];
+      const fields: ParseField[] = [
+        ...pendingCategory,
+        "advanceShare",
+        ...(placeholders.some((item) => !item.counterpartyId) ? (["counterparty"] as const) : []),
+      ];
       return incomplete(context, text, fields, {
         allocations: [{ ...shell, amount }, ...placeholders],
         ...references,
@@ -360,22 +440,10 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
           }));
     const expected = share.kind === "explicit" ? requested.length : share.participants - 1;
 
-    const resolved = requested.map((item) => ({
-      ...item,
-      counterparty: matchingReferences(item.name, context.counterparties ?? [])[0],
-    }));
-
-    const advances = resolved.map((item, index) => ({
-      ...shell,
-      allocationId:
-        context.advanceAllocationIds?.[index] ?? `${context.allocationId}-advance-${String(index)}`,
-      purpose: "advance" as const,
-      amount: money(item.amount, "TWD"),
-      ...(item.counterparty ? { counterpartyId: item.counterparty.counterpartyId } : {}),
-    }));
+    const advances = advanceAllocations(context, shell, requested);
 
     const advanceTotal = advances.reduce(
-      (sum, item) => sum.plus(item.amount.amount),
+      (sum, item) => sum.plus(item.amount?.amount ?? "0"),
       new Decimal(0),
     );
     const personal = new Decimal(amount.amount).minus(advanceTotal);
@@ -384,25 +452,24 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
       ? [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances]
       : advances;
 
-    if (resolved.length < expected || advances.some((item) => !item.counterpartyId)) {
-      return incomplete(context, text, ["counterparty"], { allocations, ...references });
+    const missingCounterparty =
+      requested.length < expected || advances.some((item) => !item.counterpartyId);
+    if (missingCounterparty || pendingCategory.length > 0) {
+      return incomplete(
+        context,
+        text,
+        [...pendingCategory, ...(missingCounterparty ? (["counterparty"] as const) : [])],
+        { allocations, ...references },
+      );
     }
-    return draft(context, text, allocations, references);
+    return draft(context, text, allocations as Allocation[], references);
   }
 
   const shell = expenseShell(context, text, account, merchant, amount);
   if (shell.length === 0) {
     // 用途無從判斷，但金額已知：留下沒有 categoryId 的配置殼，讓使用者補分類。
     return incomplete(context, text, ["category"], {
-      allocations: [
-        {
-          allocationId: context.allocationId,
-          fundsEffect: account?.type === "credit_card" ? "none" : "outflow",
-          purpose: "expense",
-          amount,
-          category: "待分類",
-        },
-      ],
+      allocations: [fallbackExpenseShell(context, account, amount)],
       ...references,
     });
   }

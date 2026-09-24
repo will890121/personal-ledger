@@ -42,6 +42,20 @@ describe("counterparty follow-up", () => {
     expect(JSON.stringify(calls.at(-1)?.payload)).toContain("朋友");
   });
 
+  it("spells out the reply path when the ledger has no counterparty at all", async () => {
+    const { bot, calls, referenceRepository } = createHarness();
+    seedDiningCategory(referenceRepository);
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 999，三個人平分" }));
+
+    const prompt = getText(calls.at(-1));
+    expect(prompt).toContain("待補交易對象");
+    // 新使用者的候選清單必定是空的（§5.4）：文案必須自己指出「回覆輸入新名稱」
+    // 這條路，否則這則訊息完全沒有出路。
+    expect(prompt).toContain("回覆這則訊息");
+    expect(JSON.stringify(calls.at(-1)?.payload)).toContain('"inline_keyboard":[]');
+  });
+
   it("asks to create an unknown counterparty typed as a reply", async () => {
     const { bot, calls, referenceRepository } = createHarness();
     seedDiningCategory(referenceRepository);

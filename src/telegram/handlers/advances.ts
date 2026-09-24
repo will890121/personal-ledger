@@ -198,7 +198,9 @@ export async function handleRecoveryReply(
 
   const trimmed = message.text?.trim() ?? "";
   if (!AMOUNT_ONLY.test(trimmed)) {
-    await context.reply("金額格式無法辨識，請輸入數字。");
+    // 上面已經把待回收的鍵清掉了，這則訊息不能邀請使用者「再輸入一次數字」——
+    // 照著重試的數字會被當成一筆全新的支出，產生垃圾草稿。指引重新開始才是實話。
+    await context.reply("金額格式無法辨識，請重新從 /advances 按「記錄收款」。");
     return true;
   }
 

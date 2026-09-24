@@ -160,6 +160,27 @@ describe("/advances", () => {
     expect(JSON.stringify(calls.at(-1)?.payload)).toContain("確認");
   });
 
+  it("tells the user to start over when the recovery amount is not a number", async () => {
+    const { bot, calls, counterpartyRef } = harnessWithAdvances();
+    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "/advances" }));
+    await bot.handleUpdate(callbackUpdate({ updateId: 11, data: `ar:${counterpartyRef}` }));
+    const sentCount = sentMessages(calls).length;
+
+    await bot.handleUpdate(
+      replyUpdate({ updateId: 12, text: "三百", replyToMessageId: sentCount }),
+    );
+
+    // 待回收的鍵在驗格式之前就被清掉了，所以錯誤訊息不能邀請使用者「再輸入數字」：
+    // 照著重試的數字會變成一筆全新的支出草稿。指引重新開始才是實話。
+    const text = getText(calls.at(-1));
+    expect(text).toContain("/advances");
+    expect(text).not.toContain("請輸入數字");
+
+    await bot.handleUpdate(replyUpdate({ updateId: 13, text: "300", replyToMessageId: sentCount }));
+
+    expect(getText(calls.at(-1))).not.toContain("總金額：TWD 300");
+  });
+
   it("does not let a stale recovery prompt hijack an unrelated plain-number reply", async () => {
     const { bot, calls, counterpartyRef } = harnessWithAdvances();
     await bot.handleUpdate(messageUpdate({ updateId: 10, text: "/advances" }));
