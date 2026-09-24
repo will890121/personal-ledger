@@ -61,12 +61,16 @@ function groupKeyboard(page: PendingPage): InlineKeyboardButton[][] {
   return rows;
 }
 
-async function replyWithPending(
-  context: Context,
+interface PendingView {
+  readonly text: string;
+  readonly replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] };
+}
+
+async function renderPending(
   dependencies: LedgerBotDependencies,
   inputPage: number,
   confirmPage: number,
-): Promise<void> {
+): Promise<PendingView> {
   const input = await listPending(
     dependencies.repository,
     dependencies.ownerId,
@@ -80,12 +84,37 @@ async function replyWithPending(
     confirmPage,
   );
   const lines = [...groupLines(input), ...groupLines(confirm)];
-  if (lines.length === 0) {
-    await context.reply("目前沒有待處理項目。");
-    return;
-  }
-  await context.reply(lines.join("\n"), {
-    reply_markup: { inline_keyboard: [...groupKeyboard(input), ...groupKeyboard(confirm)] },
+  if (lines.length === 0) return { text: "目前沒有待處理項目。" };
+  return {
+    text: lines.join("\n"),
+    replyMarkup: { inline_keyboard: [...groupKeyboard(input), ...groupKeyboard(confirm)] },
+  };
+}
+
+async function replyWithPending(
+  context: Context,
+  dependencies: LedgerBotDependencies,
+  inputPage: number,
+  confirmPage: number,
+): Promise<void> {
+  const view = await renderPending(dependencies, inputPage, confirmPage);
+  await context.reply(view.text, {
+    ...(view.replyMarkup ? { reply_markup: view.replyMarkup } : {}),
+  });
+}
+
+/**
+ * 就地更新清單訊息。留著過期的清單會讓已封存的項目仍可按下，是誤觸來源。
+ */
+async function refreshPendingMessage(
+  context: Context,
+  dependencies: LedgerBotDependencies,
+  inputPage: number,
+  confirmPage: number,
+): Promise<void> {
+  const view = await renderPending(dependencies, inputPage, confirmPage);
+  await context.editMessageText(view.text, {
+    ...(view.replyMarkup ? { reply_markup: view.replyMarkup } : {}),
   });
 }
 
@@ -104,7 +133,7 @@ export function registerPendingHandlers(bot: Bot, dependencies: LedgerBotDepende
     if (action.kind === "pending-page") {
       await context.answerCallbackQuery();
       const isInput = action.status === "input";
-      await replyWithPending(
+      await refreshPendingMessage(
         context,
         dependencies,
         isInput ? action.page : 0,
@@ -125,6 +154,7 @@ export function registerPendingHandlers(bot: Bot, dependencies: LedgerBotDepende
     if (action.kind === "archive") {
       await dependencies.repository.archiveDraft(record.draftId);
       await context.answerCallbackQuery({ text: "已封存" });
+      await refreshPendingMessage(context, dependencies, 0, 0);
       return;
     }
 

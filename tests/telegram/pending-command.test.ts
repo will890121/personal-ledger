@@ -34,6 +34,48 @@ describe("/pending", () => {
     expect(getText(calls.at(-1))).toContain("目前沒有待處理項目");
   });
 
+  it("refreshes the list in place after archiving instead of leaving it stale", async () => {
+    const { bot, calls, repository } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 2, text: "午餐 120" }));
+    const draftRef = firstDraftRef(repository);
+    await bot.handleUpdate(messageUpdate({ updateId: 3, text: "/pending" }));
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 4, data: `z:${draftRef}` }));
+
+    const edit = calls.at(-1);
+    expect(edit?.method).toBe("editMessageText");
+    // 封存的是待補充那筆，就地更新後清單只應該剩下待確認組。
+    expect(getText(edit)).not.toContain("待補充");
+    expect(getText(edit)).toContain("待確認");
+    expect(JSON.stringify(edit?.payload)).not.toContain(draftRef);
+  });
+
+  it("edits the same message when paging instead of sending a new list", async () => {
+    const { bot, calls, repository } = createHarness();
+    for (let index = 0; index < 12; index += 1) {
+      await bot.handleUpdate(
+        messageUpdate({ updateId: index + 1, text: `午餐 ${String(index + 1)}0` }),
+      );
+    }
+    await bot.handleUpdate(messageUpdate({ updateId: 20, text: "/pending" }));
+    expect(repository.drafts.size).toBe(12);
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 21, data: "p:confirm:1" }));
+
+    const edit = calls.at(-1);
+    expect(edit?.method).toBe("editMessageText");
+    expect(getText(edit)).toContain("待確認（2 / 2）");
+  });
+
+  it("tells the caller when the archived draft is already gone", async () => {
+    const { bot, calls } = createHarness();
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 1, data: "z:aabbccdd" }));
+
+    expect(JSON.stringify(calls.at(-1)?.payload)).toContain("草稿不存在");
+  });
+
   it("lists drafts waiting for confirmation", async () => {
     const { bot, calls } = createHarness();
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
