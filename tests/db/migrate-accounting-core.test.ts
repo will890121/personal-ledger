@@ -20,7 +20,7 @@ describe("M2 accounting core migration", () => {
 
     expect(
       database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     expect(
       database
         .prepare(

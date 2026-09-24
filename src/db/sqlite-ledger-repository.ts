@@ -306,6 +306,31 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return Promise.resolve(row.total);
   }
 
+  public getSetting(ownerId: string, key: string): Promise<string | null> {
+    const row = this.database
+      .prepare("SELECT value FROM settings WHERE owner_id = ? AND key = ?")
+      .get(ownerId, key) as { value: string } | undefined;
+    return Promise.resolve(row?.value ?? null);
+  }
+
+  public setSetting(ownerId: string, key: string, value: string): Promise<void> {
+    this.database
+      .prepare(
+        `INSERT INTO settings (owner_id, key, value, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT (owner_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run(ownerId, key, value);
+    return Promise.resolve();
+  }
+
+  public clearSetting(ownerId: string, key: string): Promise<void> {
+    this.database
+      .prepare("DELETE FROM settings WHERE owner_id = ? AND key = ?")
+      .run(ownerId, key);
+    return Promise.resolve();
+  }
+
   private generateDraftRef(ownerId: string): string {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const candidate = randomBytes(4).toString("hex");

@@ -6,6 +6,7 @@ const migrations = [
   { version: 1, url: new URL("./migrations/0001_initial.sql", import.meta.url) },
   { version: 2, url: new URL("./migrations/0002_accounting_core.sql", import.meta.url) },
   { version: 3, url: new URL("./migrations/0003_conversation_state.sql", import.meta.url) },
+  { version: 4, url: new URL("./migrations/0004_settings.sql", import.meta.url) },
 ] as const;
 
 export function migrate(database: Database.Database): void {

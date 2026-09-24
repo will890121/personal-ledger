@@ -70,6 +70,22 @@ export class FakeLedgerRepository implements LedgerRepository {
     return draftRef;
   }
 
+  public readonly settings = new Map<string, string>();
+
+  public getSetting(ownerId: string, key: string): Promise<string | null> {
+    return Promise.resolve(this.settings.get(`${ownerId}:${key}`) ?? null);
+  }
+
+  public setSetting(ownerId: string, key: string, value: string): Promise<void> {
+    this.settings.set(`${ownerId}:${key}`, value);
+    return Promise.resolve();
+  }
+
+  public clearSetting(ownerId: string, key: string): Promise<void> {
+    this.settings.delete(`${ownerId}:${key}`);
+    return Promise.resolve();
+  }
+
   public saveBatch(input: BatchInput): Promise<void> {
     this.batches.set(input.batchId, input);
     return Promise.resolve();

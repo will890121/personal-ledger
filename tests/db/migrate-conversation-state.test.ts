@@ -91,6 +91,6 @@ describe("migration 0003", () => {
     const versions = database
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all();
-    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
   });
 });

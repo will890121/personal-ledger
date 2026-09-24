@@ -98,6 +98,41 @@ describe("/pending", () => {
     expect(getText(calls.at(-1))).toContain("待補金額");
   });
 
+  it("offers a close button that removes the list", async () => {
+    const { bot, calls } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 2, text: "/pending" }));
+    expect(JSON.stringify(calls.at(-1)?.payload)).toContain("dismiss-pending");
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 3, data: "dismiss-pending" }));
+
+    expect(calls.at(-1)?.method).toBe("deleteMessage");
+  });
+
+  it("closes the previous list when a new one is requested", async () => {
+    const { bot, calls } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 2, text: "/pending" }));
+
+    await bot.handleUpdate(messageUpdate({ updateId: 3, text: "/pending" }));
+
+    const deletions = calls.filter((call) => call.method === "deleteMessage");
+    expect(deletions).toHaveLength(1);
+    // 第一份清單是第二則送出的訊息，因此 message_id 為 2。
+    expect(JSON.stringify(deletions[0]?.payload)).toContain('"message_id":2');
+  });
+
+  it("keeps working when the previous list can no longer be deleted", async () => {
+    const { bot, calls, repository } = createHarness({ failDeleteMessage: true });
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 2, text: "/pending" }));
+
+    await bot.handleUpdate(messageUpdate({ updateId: 3, text: "/pending" }));
+
+    expect(getText(calls.at(-1))).toContain("待補充");
+    expect(await repository.getSetting("123", "pending_list_message")).not.toBeNull();
+  });
+
   it("says nothing is pending when the list is empty", async () => {
     const { bot, calls } = createHarness();
 

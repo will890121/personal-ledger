@@ -34,6 +34,8 @@ export function firstDraftRef(repository: FakeLedgerRepository): string {
 export interface HarnessOptions {
   readonly today?: string;
   readonly now?: Date;
+  /** 模擬 Telegram 拒絕刪除訊息（例如超過 48 小時）。 */
+  readonly failDeleteMessage?: boolean;
 }
 
 export function createHarness(options: HarnessOptions = {}) {
@@ -69,6 +71,9 @@ export function createHarness(options: HarnessOptions = {}) {
   });
   const capture: Transformer = (_previous, method, payload) => {
     calls.push({ method, payload });
+    if (method === "deleteMessage" && options.failDeleteMessage === true) {
+      return Promise.reject(new Error("message can't be deleted"));
+    }
     if (method === "sendMessage") {
       nextMessageId += 1;
       return Promise.resolve({

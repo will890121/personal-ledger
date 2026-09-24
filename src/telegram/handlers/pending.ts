@@ -87,8 +87,39 @@ async function renderPending(
   if (lines.length === 0) return { text: "目前沒有待處理項目。" };
   return {
     text: lines.join("\n"),
-    replyMarkup: { inline_keyboard: [...groupKeyboard(input), ...groupKeyboard(confirm)] },
+    replyMarkup: {
+      inline_keyboard: [
+        ...groupKeyboard(input),
+        ...groupKeyboard(confirm),
+        [{ text: "關閉清單", callback_data: "dismiss-pending" }],
+      ],
+    },
   };
+}
+
+const PENDING_MESSAGE_KEY = "pending_list_message";
+
+/**
+ * 關掉上一份清單。留著舊清單會顯示過期內容，按鈕也仍可按下，是誤導與誤觸的來源。
+ * Telegram 只允許刪除 48 小時內的訊息，刪不掉就安靜略過。
+ */
+async function closePreviousList(
+  context: Context,
+  dependencies: LedgerBotDependencies,
+): Promise<void> {
+  const stored = await dependencies.repository.getSetting(
+    dependencies.ownerId,
+    PENDING_MESSAGE_KEY,
+  );
+  if (!stored) return;
+  const [chatId, messageId] = stored.split(":");
+  if (!chatId || !messageId) return;
+  try {
+    await context.api.deleteMessage(Number(chatId), Number(messageId));
+  } catch {
+    // 舊清單已被手動刪除或超過刪除期限，忽略。
+  }
+  await dependencies.repository.clearSetting(dependencies.ownerId, PENDING_MESSAGE_KEY);
 }
 
 async function replyWithPending(
@@ -97,10 +128,16 @@ async function replyWithPending(
   inputPage: number,
   confirmPage: number,
 ): Promise<void> {
+  await closePreviousList(context, dependencies);
   const view = await renderPending(dependencies, inputPage, confirmPage);
-  await context.reply(view.text, {
+  const sent = await context.reply(view.text, {
     ...(view.replyMarkup ? { reply_markup: view.replyMarkup } : {}),
   });
+  await dependencies.repository.setSetting(
+    dependencies.ownerId,
+    PENDING_MESSAGE_KEY,
+    `${String(sent.chat.id)}:${String(sent.message_id)}`,
+  );
 }
 
 /**
@@ -121,6 +158,12 @@ async function refreshPendingMessage(
 export function registerPendingHandlers(bot: Bot, dependencies: LedgerBotDependencies): void {
   bot.command("pending", async (context) => {
     await replyWithPending(context, dependencies, 0, 0);
+  });
+
+  bot.callbackQuery("dismiss-pending", async (context) => {
+    await context.answerCallbackQuery();
+    await context.deleteMessage();
+    await dependencies.repository.clearSetting(dependencies.ownerId, PENDING_MESSAGE_KEY);
   });
 
   bot.callbackQuery(/^[opz]:/, async (context) => {

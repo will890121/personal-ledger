@@ -124,6 +124,9 @@ export interface LedgerRepository {
   listPendingDrafts(query: PendingQuery): Promise<PendingDraftSummary[]>;
   countPendingDrafts(ownerId: string, status: PendingStatus): Promise<number>;
   archiveDraft(draftId: string): Promise<void>;
+  getSetting(ownerId: string, key: string): Promise<string | null>;
+  setSetting(ownerId: string, key: string, value: string): Promise<void>;
+  clearSetting(ownerId: string, key: string): Promise<void>;
   getDraft(draftId: string): Promise<TransactionDraft | null>;
   confirmDraft(
     draftId: string,
