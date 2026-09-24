@@ -1,3 +1,4 @@
+import type { AdvanceRow, RecoveryRow } from "../../src/domain/advance.js";
 import { IncompleteDraftSchema, type IncompleteDraft } from "../../src/domain/draft.js";
 import {
   ConfirmedTransactionSchema,
@@ -264,6 +265,9 @@ export class FakeLedgerRepository implements LedgerRepository {
   public softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction> {
     return this.getTransaction(command.ownerId, command.transactionId).then((current) => {
       if (!current) throw new Error("transaction not found for owner");
+      if (this.countRecoveries(command.transactionId) > 0) {
+        throw new Error("advance still has recoveries");
+      }
       const deleted = ConfirmedTransactionSchema.parse({
         ...current,
         status: "deleted",
@@ -273,6 +277,77 @@ export class FakeLedgerRepository implements LedgerRepository {
       this.transactions.set(current.requestId, deleted);
       return deleted;
     });
+  }
+
+  // 掃描已確認交易，計算有多少筆回收配置指向某交易的任一配置。
+  // 與 SqliteLedgerRepository 的刪除保護語意一致：不限定 owner，只看回收交易是否 confirmed。
+  private countRecoveries(transactionId: string, ownerId?: string): number {
+    const allocationIds = new Set<string>();
+    for (const transaction of this.transactions.values()) {
+      if (transaction.transactionId !== transactionId) continue;
+      for (const allocation of transaction.allocations) allocationIds.add(allocation.allocationId);
+    }
+    let total = 0;
+    for (const transaction of this.transactions.values()) {
+      if (transaction.status !== "confirmed") continue;
+      if (ownerId !== undefined && transaction.ownerId !== ownerId) continue;
+      for (const allocation of transaction.allocations) {
+        if (
+          allocation.recoversAllocationId &&
+          allocationIds.has(allocation.recoversAllocationId)
+        ) {
+          total += 1;
+        }
+      }
+    }
+    return total;
+  }
+
+  public listAdvanceRows(ownerId: string): Promise<AdvanceRow[]> {
+    const rows: AdvanceRow[] = [];
+    for (const transaction of this.transactions.values()) {
+      if (transaction.ownerId !== ownerId || transaction.status !== "confirmed") continue;
+      for (const allocation of transaction.allocations) {
+        if (allocation.purpose !== "advance") continue;
+        rows.push({
+          allocationId: allocation.allocationId,
+          transactionId: transaction.transactionId,
+          occurredDate: transaction.occurredDate,
+          counterpartyId: allocation.counterpartyId ?? "",
+          ...(allocation.categoryId ? { categoryId: allocation.categoryId } : {}),
+          category: allocation.category,
+          ...(allocation.subcategory ? { subcategory: allocation.subcategory } : {}),
+          amount: allocation.amount.amount,
+        });
+      }
+    }
+    rows.sort(
+      (left, right) =>
+        left.occurredDate.localeCompare(right.occurredDate) ||
+        left.allocationId.localeCompare(right.allocationId),
+    );
+    return Promise.resolve(rows);
+  }
+
+  public listRecoveryRows(ownerId: string): Promise<RecoveryRow[]> {
+    const rows: RecoveryRow[] = [];
+    for (const transaction of this.transactions.values()) {
+      if (transaction.ownerId !== ownerId || transaction.status !== "confirmed") continue;
+      for (const allocation of transaction.allocations) {
+        if (allocation.purpose !== "advance_recovery" || !allocation.recoversAllocationId) {
+          continue;
+        }
+        rows.push({
+          recoversAllocationId: allocation.recoversAllocationId,
+          amount: allocation.amount.amount,
+        });
+      }
+    }
+    return Promise.resolve(rows);
+  }
+
+  public countRecoveriesForTransaction(ownerId: string, transactionId: string): Promise<number> {
+    return Promise.resolve(this.countRecoveries(transactionId, ownerId));
   }
 
   public linkTransaction(): Promise<void> {

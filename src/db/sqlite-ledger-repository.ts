@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import type { AdvanceRow, RecoveryRow } from "../domain/advance.js";
 import { IncompleteDraftSchema, type IncompleteDraft } from "../domain/draft.js";
 import {
   ConfirmedTransactionSchema,
@@ -51,6 +52,16 @@ interface EventRow {
   source_type: string;
   source_ref: string;
   raw_text: string;
+}
+interface AdvanceRowRecord {
+  allocation_id: string;
+  transaction_id: string;
+  occurred_date: string;
+  counterparty_id: string | null;
+  category_id: string | null;
+  category_snapshot: string;
+  subcategory_snapshot: string | null;
+  amount: string;
 }
 interface TransactionRow {
   transaction_id: string;
@@ -515,6 +526,17 @@ export class SqliteLedgerRepository implements LedgerRepository {
       const before = this.requireMutable(command.ownerId, command.transactionId);
       if (before.updatedAt !== command.expectedUpdatedAt)
         throw new Error("stale transaction update");
+      const recoveries = this.database
+        .prepare(
+          `SELECT count(*) AS total
+         FROM allocations r
+         JOIN transactions rt ON rt.transaction_id = r.transaction_id
+         WHERE rt.status = 'confirmed' AND r.recovers_allocation_id IN (
+           SELECT allocation_id FROM allocations WHERE transaction_id = ?
+         )`,
+        )
+        .get(command.transactionId) as { total: number };
+      if (recoveries.total > 0) throw new Error("advance still has recoveries");
       const result = this.database
         .prepare(
           "UPDATE transactions SET status = 'deleted', updated_at = ?, deleted_at = ? WHERE transaction_id = ? AND owner_id = ? AND status = 'confirmed' AND updated_at = ?",
@@ -641,6 +663,64 @@ export class SqliteLedgerRepository implements LedgerRepository {
       )
       .all(ownerId, limit) as TransactionRow[];
     return Promise.resolve(rows.map((row) => this.toConfirmedTransaction(row)));
+  }
+
+  public listAdvanceRows(ownerId: string): Promise<AdvanceRow[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT a.allocation_id, a.transaction_id, t.occurred_date, a.counterparty_id,
+          a.category_id, a.category_snapshot, a.subcategory_snapshot, a.amount
+       FROM allocations a
+       JOIN transactions t ON t.transaction_id = a.transaction_id
+       WHERE t.owner_id = ? AND t.status = 'confirmed' AND a.purpose = 'advance'
+       ORDER BY t.occurred_date, a.rowid`,
+      )
+      .all(ownerId) as AdvanceRowRecord[];
+    return Promise.resolve(
+      rows.map((row) => ({
+        allocationId: row.allocation_id,
+        transactionId: row.transaction_id,
+        occurredDate: row.occurred_date,
+        counterpartyId: row.counterparty_id ?? "",
+        ...(row.category_id ? { categoryId: row.category_id } : {}),
+        category: row.category_snapshot,
+        ...(row.subcategory_snapshot ? { subcategory: row.subcategory_snapshot } : {}),
+        amount: row.amount,
+      })),
+    );
+  }
+
+  public listRecoveryRows(ownerId: string): Promise<RecoveryRow[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT a.recovers_allocation_id, a.amount
+       FROM allocations a
+       JOIN transactions t ON t.transaction_id = a.transaction_id
+       WHERE t.owner_id = ? AND t.status = 'confirmed'
+         AND a.purpose = 'advance_recovery' AND a.recovers_allocation_id IS NOT NULL`,
+      )
+      .all(ownerId) as { recovers_allocation_id: string; amount: string }[];
+    return Promise.resolve(
+      rows.map((row) => ({
+        recoversAllocationId: row.recovers_allocation_id,
+        amount: row.amount,
+      })),
+    );
+  }
+
+  public countRecoveriesForTransaction(ownerId: string, transactionId: string): Promise<number> {
+    const row = this.database
+      .prepare(
+        `SELECT count(*) AS total
+       FROM allocations r
+       JOIN transactions rt ON rt.transaction_id = r.transaction_id
+       WHERE rt.owner_id = ? AND rt.status = 'confirmed'
+         AND r.recovers_allocation_id IN (
+           SELECT allocation_id FROM allocations WHERE transaction_id = ?
+         )`,
+      )
+      .get(ownerId, transactionId) as { total: number };
+    return Promise.resolve(row.total);
   }
 
   private getDraftSync(draftId: string): TransactionDraft | null {
