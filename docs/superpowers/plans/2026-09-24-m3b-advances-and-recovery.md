@@ -961,7 +961,9 @@ describe("advance queries", () => {
   it("refuses to delete an advance transaction that still has recoveries", async () => {
     const { repository, command } = await setupAdvanceLedgerWithRecovery("300");
 
-    await expect(repository.softDeleteTransaction(command)).rejects.toThrow(
+    // better-sqlite3 是同步的，execute.immediate() 在 Promise.resolve() 包裝之前就拋錯，
+    // 因此要用同步斷言。既有測試對 softDeleteTransaction 的其他保護也是這樣寫。
+    expect(() => repository.softDeleteTransaction(command)).toThrow(
       "advance still has recoveries",
     );
   });
