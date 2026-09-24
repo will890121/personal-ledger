@@ -7,13 +7,15 @@ import { answerDraft, type AnswerValue } from "../../application/answer-draft.js
 import { createBatch, type CreateBatchResult } from "../../application/create-batch.js";
 import { listPending } from "../../application/list-pending.js";
 import { loadReferenceSnapshot } from "../../application/reference-data.js";
+import { recordRecovery } from "../../application/record-recovery.js";
 import { IncompleteDraftSchema, type ParseField } from "../../domain/draft.js";
 import type { DraftRecord } from "../../ports/ledger-repository.js";
+import { parseRepayment } from "../../parser/split-share.js";
 import { decodeCallback, encodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
 import { formatPreview } from "../format-preview.js";
 import { formatBatchSummary, formatPrompt } from "../format-prompt.js";
-import { handleRecoveryReply } from "./advances.js";
+import { deliverRecoveryResult, handleRecoveryReply, loadIncomeCategoryIds } from "./advances.js";
 
 const AMOUNT_ONLY = /^\d+(?:\.\d+)?$/;
 
@@ -112,6 +114,47 @@ async function proposeCounterparty(
     String(sent.chat.id),
     String(sent.message_id),
   );
+}
+
+/**
+ * 打字直接輸入的回收語句（「小明還 300」「收到小明 300」）：必須排在純數字
+ * 攔截之後、createBatch 之前嘗試，且對象名稱要與交易對象完全相符才觸發，
+ * 否則「小明還欠我錢」這類一般敘述、或「午餐 120」這類一般支出，都可能被
+ * 誤判或搶走輸入。parseRepayment 找不到相符對象時回傳 null，此時放行給
+ * createBatch 當成一般交易解析。
+ *
+ * 回傳 true 代表這則訊息已被本函式處理完畢，呼叫端不應該再往下走。
+ */
+async function tryRecordRecoveryFromText(
+  context: Context,
+  dependencies: LedgerBotDependencies,
+): Promise<boolean> {
+  const counterparties = await dependencies.referenceRepository.listActiveCounterparties(
+    dependencies.ownerId,
+  );
+  const repayment = parseRepayment(context.message?.text ?? "", counterparties);
+  if (!repayment) return false;
+
+  const result = await recordRecovery(
+    {
+      ownerId: dependencies.ownerId,
+      counterpartyId: repayment.counterpartyId,
+      received: repayment.amount,
+      occurredDate: dependencies.today(),
+      telegramUpdateId: String(context.update.update_id),
+      sourceRef: `${String(context.chat?.id ?? "")}:${String(context.message?.message_id ?? "")}`,
+      rawText: context.message?.text ?? "",
+      receivedAt: dependencies.now().toISOString(),
+    },
+    {
+      repository: dependencies.repository,
+      generateId: dependencies.generateId,
+      incomeCategoryIds: await loadIncomeCategoryIds(dependencies),
+    },
+  );
+
+  await deliverRecoveryResult(context, result, dependencies);
+  return true;
 }
 
 async function handleBatchResult(
@@ -263,6 +306,8 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
         return;
       }
     }
+
+    if (await tryRecordRecoveryFromText(context, dependencies)) return;
 
     const result = await createBatch(
       {

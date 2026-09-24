@@ -1,5 +1,7 @@
 import { Decimal } from "decimal.js";
 
+import type { Counterparty } from "../domain/reference-data.js";
+
 export type ShareResult =
   | { readonly kind: "none" }
   | {
@@ -75,4 +77,21 @@ export function parseShare(text: string, total: string): ShareResult {
     return { kind: "not_divisible", participants, names };
   }
   return { kind: "split", participants, names, share: shares.toString() };
+}
+
+// 「小明還 300」「收到小明 300」：整串錨定，避免「小明還欠我錢」這類敘述
+// 誤判成回收語句（結尾必須是純數字金額）。對象名稱須與交易對象完全相符才觸發，
+// 找不到對象時回傳 null，交由呼叫端落回一般支出解析。
+const REPAYMENT_PATTERN = /^(?:收到\s*)?(.+?)\s*(?:還|還我|歸還)\s*([0-9]+(?:\.[0-9]+)?)$/;
+
+export function parseRepayment(
+  text: string,
+  counterparties: readonly Counterparty[],
+): { counterpartyId: string; amount: string } | null {
+  const match = REPAYMENT_PATTERN.exec(text.trim());
+  if (!match) return null;
+  const name = (match[1] ?? "").trim();
+  const counterparty = counterparties.find((item) => item.name === name);
+  if (!counterparty) return null;
+  return { counterpartyId: counterparty.counterpartyId, amount: match[2] ?? "" };
 }

@@ -6,7 +6,7 @@ import type { InlineKeyboardMarkup } from "grammy/types";
 import { abandonAdvance } from "../../application/abandon-advance.js";
 import { listAdvances, type CounterpartyAdvances } from "../../application/list-advances.js";
 import { loadReferenceSnapshot } from "../../application/reference-data.js";
-import { recordRecovery } from "../../application/record-recovery.js";
+import { recordRecovery, type RecordRecoveryResult } from "../../application/record-recovery.js";
 import { computeOutstanding } from "../../domain/advance.js";
 import { decodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
@@ -63,7 +63,13 @@ async function buildRefs(
   return { counterparty, allocation };
 }
 
-async function loadIncomeCategoryIds(dependencies: LedgerBotDependencies): Promise<string[]> {
+/**
+ * 取得啟用中的收入葉分類 ID，供超額回收草稿的待補分類欄位使用。
+ * Task 14 的文字入口（drafts.ts）沿用同一套，避免另外發明一份邏輯。
+ */
+export async function loadIncomeCategoryIds(
+  dependencies: LedgerBotDependencies,
+): Promise<string[]> {
   const categories = await dependencies.referenceRepository.listActiveCategories(
     dependencies.ownerId,
   );
@@ -218,13 +224,28 @@ export async function handleRecoveryReply(
     },
   );
 
+  await deliverRecoveryResult(context, result, dependencies);
+  return true;
+}
+
+/**
+ * 把 recordRecovery 的結果送回聊天室：重複輸入、查無未回收代墊、以及正常
+ * 草稿／待補分類三種結果的呈現方式，在「回覆待回收提問」（本檔）與「打字
+ * 直接輸入回收語句」（drafts.ts 的 message:text）兩條路徑共用，避免各自維護
+ * 一份幾乎相同的渲染邏輯。
+ */
+export async function deliverRecoveryResult(
+  context: Context,
+  result: RecordRecoveryResult,
+  dependencies: LedgerBotDependencies,
+): Promise<void> {
   if (result.kind === "duplicate") {
     await context.reply("此更新已處理。");
-    return true;
+    return;
   }
   if (result.kind === "no_outstanding") {
     await context.reply("這位交易對象目前沒有未回收代墊。");
-    return true;
+    return;
   }
 
   const references = await loadReferenceSnapshot(
@@ -243,7 +264,6 @@ export async function handleRecoveryReply(
     String(sent.chat.id),
     String(sent.message_id),
   );
-  return true;
 }
 
 export function registerAdvanceHandlers(bot: Bot, dependencies: LedgerBotDependencies): void {
