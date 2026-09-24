@@ -6,7 +6,8 @@ import {
 import { Decimal } from "decimal.js";
 import type { ParseField, PartialAllocation, PartialDraft } from "../domain/draft.js";
 import { money, type Money } from "../domain/money.js";
-import type { Account, Category, Merchant } from "../domain/reference-data.js";
+import type { Account, Category, Counterparty, Merchant } from "../domain/reference-data.js";
+import { parseShare } from "./split-share.js";
 
 export type { ParseField };
 
@@ -21,6 +22,8 @@ export interface ParseContext {
   readonly accounts?: readonly Account[];
   readonly categories?: readonly Category[];
   readonly merchants?: readonly Merchant[];
+  readonly counterparties?: readonly Counterparty[];
+  readonly advanceAllocationIds?: readonly string[];
 }
 
 export type ParseResult =
@@ -258,6 +261,59 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
   }
   if (text.includes("卡") && accounts.length === 0)
     return incomplete(context, text, ["account"], { ...references });
+
+  const share = parseShare(text, amount.amount);
+  if (share.kind !== "none") {
+    const shell = expenseShell(context, text, account, merchant, amount)[0];
+    if (!shell) return incomplete(context, text, ["category"], { ...references });
+
+    if (share.kind === "not_divisible") {
+      return incomplete(context, text, ["advanceShare"], {
+        allocations: [
+          { ...shell, amount },
+          {
+            ...shell,
+            allocationId: context.advanceAllocationIds?.[0] ?? `${context.allocationId}-advance`,
+            purpose: "advance",
+          },
+        ],
+        ...references,
+      });
+    }
+
+    const requested =
+      share.kind === "explicit"
+        ? share.shares
+        : share.names.map((name) => ({ name, amount: share.share }));
+    const expected = share.kind === "explicit" ? requested.length : share.participants - 1;
+
+    const resolved = requested.map((item) => ({
+      ...item,
+      counterparty: matchingReferences(item.name, context.counterparties ?? [])[0],
+    }));
+
+    const advances = resolved.map((item, index) => ({
+      ...shell,
+      allocationId:
+        context.advanceAllocationIds?.[index] ?? `${context.allocationId}-advance-${String(index)}`,
+      purpose: "advance" as const,
+      amount: money(item.amount, "TWD"),
+      ...(item.counterparty ? { counterpartyId: item.counterparty.counterpartyId } : {}),
+    }));
+
+    const advanceTotal = advances.reduce(
+      (sum, item) => sum.plus(item.amount.amount),
+      new Decimal(0),
+    );
+    const personal = new Decimal(amount.amount).minus(advanceTotal);
+    const allocations = [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances];
+
+    if (resolved.length < expected || advances.some((item) => !item.counterpartyId)) {
+      return incomplete(context, text, ["counterparty"], { allocations, ...references });
+    }
+    return draft(context, text, allocations, references);
+  }
+
   const shell = expenseShell(context, text, account, merchant, amount);
   if (shell.length === 0) {
     // 用途無從判斷，但金額已知：留下沒有 categoryId 的配置殼，讓使用者補分類。

@@ -151,6 +151,13 @@ export async function createBatch(
       draftId,
       allocationId: dependencies.generateId(),
       additionalAllocationId: dependencies.generateId(),
+      // 最多支援 4 位共同參與者；超過時解析器會用 fallback 字串命名多出的代墊配置。
+      advanceAllocationIds: [
+        dependencies.generateId(),
+        dependencies.generateId(),
+        dependencies.generateId(),
+        dependencies.generateId(),
+      ],
       today: command.occurredDate,
       ...references,
     });
