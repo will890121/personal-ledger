@@ -131,12 +131,20 @@ describe("parseShare", () => {
     });
   });
 
-  it("reads a three way split with two names", () => {
+  it("reads a three way split and leaves unparseable names to the follow-up", () => {
+    // 逗號列舉的名字不在四種明確寫法之內，因此 names 為空，由應用層追問。
     expect(parseShare("聚餐 1260，小明，小華，三個人平分", "1260")).toEqual({
       kind: "split",
       participants: 3,
-      names: ["小明", "小華"],
+      names: [],
       share: "420",
+    });
+  });
+
+  it("only takes names from the four explicit forms", () => {
+    expect(parseShare("聚餐 1260，現金支付，三個人平分", "1260")).toMatchObject({ names: [] });
+    expect(parseShare("聚餐 1260，幫小明付，三個人平分", "1260")).toMatchObject({
+      names: ["小明"],
     });
   });
 
@@ -251,6 +259,8 @@ export function parseShare(text: string, total: string): ShareResult {
 ```
 
 名字抽取只認 `X欠`、`X要還`、`X該給`、`幫X付` 這四種明確寫法。抽不到名字時 `names` 為空陣列，由應用層追問——解析器不猜測誰是誰。
+
+**不得為了讓多人平分的測試通過而擴大抽取範圍。** 逗號列舉（`小明，小華，三個人平分`）不在四種寫法之內：任何「把逗號分隔的詞當人名」的規則都會把 `現金支付`、`小明先走了` 這類片語收進 `names`，讓應用層誤以為已經取得分帳對象而不再追問。設計 §5.3 明定「名字數量少於 N−1 就追問」，空陣列是完全受支援的路徑。
 
 - [ ] **Step 4：執行測試確認通過**
 
