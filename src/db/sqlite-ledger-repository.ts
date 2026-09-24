@@ -325,9 +325,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
   }
 
   public clearSetting(ownerId: string, key: string): Promise<void> {
-    this.database
-      .prepare("DELETE FROM settings WHERE owner_id = ? AND key = ?")
-      .run(ownerId, key);
+    this.database.prepare("DELETE FROM settings WHERE owner_id = ? AND key = ?").run(ownerId, key);
     return Promise.resolve();
   }
 

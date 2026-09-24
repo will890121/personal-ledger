@@ -142,10 +142,9 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       const preview = formatPreview(record.draft, references);
       await context.answerCallbackQuery({ text: "草稿已跨日，請重新確認" });
       // 就地取代舊預覽：留著它等於留下一顆已失效但仍可按的確認鍵。
-      await context.editMessageText(
-        [`建立日期：${record.createdDate}`, preview.text].join("\n"),
-        { reply_markup: preview.replyMarkup },
-      );
+      await context.editMessageText([`建立日期：${record.createdDate}`, preview.text].join("\n"), {
+        reply_markup: preview.replyMarkup,
+      });
       return;
     }
     const transaction = await confirmDraft(
