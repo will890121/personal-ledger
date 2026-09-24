@@ -157,4 +157,16 @@ describe("recordRecovery", () => {
       fundsEffect: "inflow",
     });
   });
+
+  it("records the surplus draft under its own batch", async () => {
+    const { dependencies, repository } = setupSingleAdvance("630");
+
+    const result = await recordRecovery({ ...baseCommand, received: "700" }, dependencies);
+
+    expect(result.kind).toBe("incomplete");
+    if (result.kind !== "incomplete") return;
+    const record = await repository.getDraftRecord({ draftId: result.draft.draftId });
+    expect(record?.batchId).toBe(result.draft.batchId);
+    expect(repository.batches.size).toBe(1);
+  });
 });

@@ -123,6 +123,8 @@ export async function recordRecovery(
       status: "awaiting_input",
     });
     const draftRef = await dependencies.repository.saveIncompleteDraft(draft, {
+      batchId,
+      batchIndex: 0,
       createdDate: command.occurredDate,
     });
     return { kind: "incomplete", draft, draftRef, surplus: plan.surplus };
