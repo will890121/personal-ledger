@@ -1,0 +1,72 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  callbackUpdate,
+  createHarness,
+  firstDraftRef,
+  getText,
+  messageUpdate,
+  replyUpdate,
+  sentMessages,
+} from "../support/telegram-harness.js";
+import type { FakeReferenceRepository } from "../support/fake-reference-repository.js";
+
+function seedDiningCategory(referenceRepository: FakeReferenceRepository): void {
+  referenceRepository.categories.push({
+    categoryId: "category-lunch",
+    ownerId: "123",
+    key: "expense_dining_lunch",
+    name: "餐飲",
+    kind: "expense",
+    parentId: "category-expense",
+    depth: 2,
+    active: true,
+  });
+}
+
+describe("counterparty follow-up", () => {
+  it("offers existing counterparties as buttons", async () => {
+    const { bot, calls, referenceRepository } = createHarness();
+    referenceRepository.counterparties.push({
+      counterpartyId: "friend",
+      ownerId: "123",
+      name: "朋友",
+      active: true,
+    });
+    seedDiningCategory(referenceRepository);
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 1260，小明欠一半" }));
+
+    const prompt = getText(calls.at(-1));
+    expect(prompt).toContain("待補交易對象");
+    expect(JSON.stringify(calls.at(-1)?.payload)).toContain("朋友");
+  });
+
+  it("asks to create an unknown counterparty typed as a reply", async () => {
+    const { bot, calls, referenceRepository } = createHarness();
+    seedDiningCategory(referenceRepository);
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 1260，小明欠一半" }));
+    const promptId = sentMessages(calls).length;
+
+    await bot.handleUpdate(replyUpdate({ updateId: 2, text: "小明", replyToMessageId: promptId }));
+
+    expect(getText(calls.at(-1))).toContain("尚未建立「小明」");
+    expect(JSON.stringify(calls.at(-1)?.payload)).toContain('"c:');
+  });
+
+  it("creates the counterparty and completes the draft", async () => {
+    const { bot, calls, repository, referenceRepository } = createHarness();
+    seedDiningCategory(referenceRepository);
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 1260，小明欠一半" }));
+    const promptId = sentMessages(calls).length;
+    await bot.handleUpdate(replyUpdate({ updateId: 2, text: "小明", replyToMessageId: promptId }));
+    const draftRef = firstDraftRef(repository);
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 3, data: `c:${draftRef}` }));
+
+    expect(referenceRepository.counterparties.map((item) => item.name)).toContain("小明");
+    const record = await repository.getDraftRecord({ ownerId: "123", draftRef });
+    expect(record?.status).toBe("awaiting_confirmation");
+    expect(record?.draft?.allocations[1]?.counterpartyId).toBeDefined();
+  });
+});

@@ -36,9 +36,43 @@ export function formatPrompt(
     return { text: [`待補金額：${segment}`, "請回覆這則訊息並輸入金額。"].join("\n") };
   }
 
+  if (pending.field === "advanceShare") {
+    // applyAdvanceShare 的語意是「每人負擔」，文案必須把總額與人數都寫清楚，
+    // 否則使用者無從判斷該填每人負擔還是代墊總額，填錯會產生金額錯誤的草稿。
+    const totalAllocation = draft.partial.allocations.find((item) => item.purpose === "expense");
+    const total = (totalAllocation?.amount ?? draft.partial.allocations[0]?.amount)?.amount ?? "0";
+    const participantCount =
+      draft.partial.allocations.filter((item) => item.purpose === "advance").length + 1;
+    return {
+      text: [
+        `待補${fieldLabels.advanceShare}：${segment}`,
+        `總額 ${total} 元，共 ${String(participantCount)} 人分攤，除不盡。`,
+        "每人負擔多少？請回覆這則訊息並輸入金額。",
+      ].join("\n"),
+    };
+  }
+
+  if (pending.proposedName) {
+    return {
+      text: `尚未建立「${pending.proposedName}」這個交易對象，要建立嗎？`,
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            {
+              text: `建立「${pending.proposedName}」並繼續`,
+              callback_data: encodeCallback({ kind: "create-counterparty", draftRef }),
+            },
+            { text: "取消", callback_data: `cancel:${draft.draftId}` },
+          ],
+        ],
+      },
+    };
+  }
+
   const labels = new Map<string, string>([
     ...(references.categories ?? []).map((item) => [item.categoryId, item.name] as const),
     ...(references.accounts ?? []).map((item) => [item.accountId, item.name] as const),
+    ...(references.counterparties ?? []).map((item) => [item.counterpartyId, item.name] as const),
   ]);
   const buttons: InlineKeyboardButton[] = pending.candidateIds
     .slice(0, MAX_CANDIDATES)

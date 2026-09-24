@@ -54,6 +54,11 @@ function candidatesFor(
   if (field === "account") {
     return references.accounts.filter((item) => item.active).map((item) => item.accountId);
   }
+  if (field === "counterparty") {
+    return references.counterparties
+      .filter((item) => item.active)
+      .map((item) => item.counterpartyId);
+  }
   return [];
 }
 

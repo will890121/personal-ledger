@@ -12,7 +12,8 @@ export type CallbackAction =
   | { readonly kind: "apply-amount"; readonly draftRef: string; readonly amount: string }
   | { readonly kind: "pending-page"; readonly status: "input" | "confirm"; readonly page: number }
   | { readonly kind: "pending-open"; readonly draftRef: string }
-  | { readonly kind: "archive"; readonly draftRef: string };
+  | { readonly kind: "archive"; readonly draftRef: string }
+  | { readonly kind: "create-counterparty"; readonly draftRef: string };
 
 const fieldCodes: Record<ParseField, string> = {
   amount: "amt",
@@ -50,6 +51,8 @@ export function encodeCallback(action: CallbackAction): string {
       return guard(`o:${action.draftRef}`);
     case "archive":
       return guard(`z:${action.draftRef}`);
+    case "create-counterparty":
+      return guard(`c:${action.draftRef}`);
   }
 }
 
@@ -76,6 +79,10 @@ export function decodeCallback(data: string): CallbackAction | null {
   if (prefix === "z" && first !== undefined) {
     if (!REF_PATTERN.test(first)) return null;
     return { kind: "archive", draftRef: first };
+  }
+  if (prefix === "c" && first !== undefined) {
+    if (!REF_PATTERN.test(first)) return null;
+    return { kind: "create-counterparty", draftRef: first };
   }
   return null;
 }
