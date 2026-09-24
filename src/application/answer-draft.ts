@@ -39,6 +39,12 @@ export type AnswerDraftResult =
     };
 
 function patchFor(command: AnswerDraftCommand): DraftPatch {
+  if (command.field === "counterparty" && command.value.kind === "reference") {
+    return { counterpartyId: command.value.id };
+  }
+  if (command.field === "advanceShare" && command.value.kind === "amount") {
+    return { advanceShare: money(command.value.text.trim(), "TWD") };
+  }
   if (command.value.kind === "amount") {
     return { amount: money(command.value.text.trim(), "TWD") };
   }

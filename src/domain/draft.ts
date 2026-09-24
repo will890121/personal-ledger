@@ -10,12 +10,15 @@ export const ParseFieldSchema = z.enum([
   "account",
   "refundTarget",
   "purpose",
+  "counterparty",
+  "advanceShare",
 ]);
 export type ParseField = z.infer<typeof ParseFieldSchema>;
 
 export const PendingFieldSchema = z.object({
   field: ParseFieldSchema,
   candidateIds: z.array(z.string().min(1)).default([]),
+  proposedName: z.string().trim().min(1).max(100).optional(),
 });
 export type PendingField = z.infer<typeof PendingFieldSchema>;
 
@@ -52,6 +55,8 @@ export interface DraftPatch {
   readonly categoryId?: string;
   readonly category?: string;
   readonly accountFromId?: string;
+  readonly counterpartyId?: string;
+  readonly advanceShare?: Money;
 }
 
 export type CompleteDraftResult =
@@ -66,6 +71,9 @@ function applyPatch(partial: PartialDraft, patch: DraftPatch): PartialDraft {
       next.category = patch.category;
       if (patch.categoryId) next.categoryId = patch.categoryId;
     }
+    if (patch.counterpartyId && next.purpose === "advance" && !next.counterpartyId) {
+      next.counterpartyId = patch.counterpartyId;
+    }
     return next;
   });
 
@@ -76,15 +84,40 @@ function applyPatch(partial: PartialDraft, patch: DraftPatch): PartialDraft {
   };
 }
 
+function applyAdvanceShare(partial: PartialDraft, share: Money): PartialDraft {
+  const total = partial.allocations.reduce(
+    (sum, allocation) => sum.plus(allocation.amount?.amount ?? "0"),
+    new Decimal(0),
+  );
+  const allocations = partial.allocations.map((allocation) =>
+    allocation.purpose === "advance" ? { ...allocation, amount: share } : allocation,
+  );
+  const advanceTotal = allocations
+    .filter((allocation) => allocation.purpose === "advance")
+    .reduce((sum, allocation) => sum.plus(allocation.amount?.amount ?? "0"), new Decimal(0));
+  const personal = total.minus(advanceTotal);
+  return {
+    ...partial,
+    allocations: allocations.map((allocation) =>
+      allocation.purpose === "expense"
+        ? { ...allocation, amount: { amount: personal.toString(), currency: "TWD" as const } }
+        : allocation,
+    ),
+  };
+}
+
 function satisfied(field: ParseField, patch: DraftPatch): boolean {
   if (field === "amount") return patch.amount !== undefined;
   if (field === "category") return patch.category !== undefined;
   if (field === "account") return patch.accountFromId !== undefined;
+  if (field === "counterparty") return patch.counterpartyId !== undefined;
+  if (field === "advanceShare") return patch.advanceShare !== undefined;
   return false;
 }
 
 export function completeDraft(draft: IncompleteDraft, patch: DraftPatch): CompleteDraftResult {
-  const partial = applyPatch(draft.partial, patch);
+  const patched = applyPatch(draft.partial, patch);
+  const partial = patch.advanceShare ? applyAdvanceShare(patched, patch.advanceShare) : patched;
   const pendingFields = draft.pendingFields.filter((item) => !satisfied(item.field, patch));
 
   if (pendingFields.length > 0) {
