@@ -840,15 +840,19 @@ describe("migration 0005", () => {
 
 ```ts
 it("round-trips the recovery reference on an allocation", async () => {
-  const { repository } = await setupConfirmedAdvance();
+  const { repository, recoveryTransactionId } = await setupConfirmedAdvance();
 
-  const transaction = await repository.getTransaction("owner-1", "recovery-transaction");
+  const transaction = await repository.getTransaction("owner-1", recoveryTransactionId);
 
   expect(transaction?.allocations[0]?.recoversAllocationId).toBe("advance-allocation");
 });
 ```
 
-`setupConfirmedAdvance` 建立一筆含代墊配置的已確認交易，再確認一筆帶 `recoversAllocationId` 的回收草稿。
+`setupConfirmedAdvance` 建立一筆含代墊配置的已確認交易，再確認一筆帶 `recoversAllocationId` 的回收草稿，並回傳 `{ repository, recoveryTransactionId }`。
+
+`confirmDraft` 的 `transaction_id` 一律由 `randomUUID()` 產生，沒有指定字面值的管道，因此測試必須使用實際回傳的 ID。**不要為了測試在 `confirmDraft` 開可注入 ID 的後門**，也不要繞過 repository 直接寫 SQL——後者會讓這個測試失去意義（它要驗證的正是 `replaceAllocations` 的寫入與讀取）。
+
+代墊配置必須有 `counterpartyId`（Task 2 的不變條件），而該欄位是外鍵，因此 `setupConfirmedAdvance` 需要先插入一列 `counterparties`。
 
 - [ ] **Step 2：執行測試確認失敗**
 
