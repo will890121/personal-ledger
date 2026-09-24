@@ -10,6 +10,7 @@ export interface ReferenceRepository {
   listActiveAccounts(ownerId: string): Promise<Account[]>;
   listActiveCategories(ownerId: string): Promise<Category[]>;
   listActiveMerchants(ownerId: string): Promise<Merchant[]>;
+  listActiveCounterparties(ownerId: string): Promise<Counterparty[]>;
   getAccount(ownerId: string, accountId: string): Promise<Account | null>;
   findAccountByName(ownerId: string, name: string): Promise<Account[]>;
   getCategory(ownerId: string, categoryId: string): Promise<Category | null>;

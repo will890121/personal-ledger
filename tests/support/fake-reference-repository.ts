@@ -14,6 +14,7 @@ export class FakeReferenceRepository implements ReferenceRepository {
   public readonly accounts: Account[] = [];
   public readonly categories: Category[] = [];
   public readonly merchants: Merchant[] = [];
+  public readonly counterparties: Counterparty[] = [];
 
   public listActiveAccounts(ownerId: string): Promise<Account[]> {
     return Promise.resolve(this.accounts.filter((item) => item.ownerId === ownerId && item.active));
@@ -26,6 +27,11 @@ export class FakeReferenceRepository implements ReferenceRepository {
   public listActiveMerchants(ownerId: string): Promise<Merchant[]> {
     return Promise.resolve(
       this.merchants.filter((item) => item.ownerId === ownerId && item.active),
+    );
+  }
+  public listActiveCounterparties(ownerId: string): Promise<Counterparty[]> {
+    return Promise.resolve(
+      this.counterparties.filter((item) => item.ownerId === ownerId && item.active),
     );
   }
   public getAccount(ownerId: string, accountId: string): Promise<Account | null> {
@@ -69,12 +75,14 @@ export class FakeReferenceRepository implements ReferenceRepository {
     return Promise.resolve(value);
   }
   public upsertCounterparty(input: NamedReferenceInput): Promise<Counterparty> {
-    return Promise.resolve({
+    const value = {
       counterpartyId: input.referenceId,
       ownerId: input.ownerId,
       name: input.name,
       active: true,
-    });
+    };
+    this.counterparties.push(value);
+    return Promise.resolve(value);
   }
   public upsertTag(input: NamedReferenceInput): Promise<Tag> {
     return Promise.resolve({

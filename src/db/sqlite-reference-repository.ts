@@ -87,6 +87,24 @@ export class SqliteReferenceRepository implements ReferenceRepository {
     );
   }
 
+  public listActiveCounterparties(ownerId: string): Promise<Counterparty[]> {
+    const rows = this.database
+      .prepare(
+        "SELECT counterparty_id, owner_id, name, active FROM counterparties WHERE owner_id = ? AND active = 1 ORDER BY name",
+      )
+      .all(ownerId) as { counterparty_id: string; owner_id: string; name: string; active: number }[];
+    return Promise.resolve(
+      rows.map((row) =>
+        CounterpartySchema.parse({
+          counterpartyId: row.counterparty_id,
+          ownerId: row.owner_id,
+          name: row.name,
+          active: row.active === 1,
+        }),
+      ),
+    );
+  }
+
   public getAccount(ownerId: string, accountId: string): Promise<Account | null> {
     const row = this.database
       .prepare("SELECT * FROM accounts WHERE owner_id = ? AND account_id = ?")

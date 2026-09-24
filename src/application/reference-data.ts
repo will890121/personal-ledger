@@ -1,5 +1,5 @@
 import type { ConfirmedTransaction } from "../domain/ledger.js";
-import type { Account, Category, Merchant } from "../domain/reference-data.js";
+import type { Account, Category, Counterparty, Merchant } from "../domain/reference-data.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 import type { ReferenceRepository } from "../ports/reference-repository.js";
 
@@ -7,18 +7,20 @@ export interface ReferenceSnapshot {
   readonly accounts: readonly Account[];
   readonly categories: readonly Category[];
   readonly merchants: readonly Merchant[];
+  readonly counterparties: readonly Counterparty[];
 }
 
 export async function loadReferenceSnapshot(
   repository: ReferenceRepository,
   ownerId: string,
 ): Promise<ReferenceSnapshot> {
-  const [accounts, categories, merchants] = await Promise.all([
+  const [accounts, categories, merchants, counterparties] = await Promise.all([
     repository.listActiveAccounts(ownerId),
     repository.listActiveCategories(ownerId),
     repository.listActiveMerchants(ownerId),
+    repository.listActiveCounterparties(ownerId),
   ]);
-  return { accounts, categories, merchants };
+  return { accounts, categories, merchants, counterparties };
 }
 
 export async function listRefundCandidates(
