@@ -103,6 +103,8 @@ function draft(
       amount: money(total, "TWD"),
       allocations,
       ...options,
+      // 保存原文片段，/pending 的清單才看得出這筆是什麼。
+      rawInputSnapshot: text,
       status: "awaiting_confirmation",
     }),
   };

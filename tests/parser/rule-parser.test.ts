@@ -32,6 +32,7 @@ describe("parseTransaction", () => {
             subcategory: "午餐",
           },
         ],
+        rawInputSnapshot: "午餐 120",
         status: "awaiting_confirmation",
       },
     });

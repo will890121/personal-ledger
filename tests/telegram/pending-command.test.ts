@@ -85,6 +85,7 @@ describe("/pending", () => {
     const text = getText(calls.at(-1));
     expect(text).toContain("待確認");
     expect(text).toContain("120");
+    expect(text).toContain("午餐 120");
   });
 
   it("reopens a pending draft when asked", async () => {
