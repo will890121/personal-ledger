@@ -88,4 +88,74 @@ describe("advance parsing", () => {
     if (result.kind !== "draft") return;
     expect(result.draft.allocations).toHaveLength(1);
   });
+
+  it("splits an explicit equal amount for a known counterparty", () => {
+    const result = parseTransaction("午餐 1260，朋友欠 630", context);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.amount.amount).toBe("1260");
+    expect(result.draft.allocations).toHaveLength(2);
+    expect(result.draft.allocations[0]).toMatchObject({ purpose: "expense" });
+    expect(result.draft.allocations[0]?.amount.amount).toBe("630");
+    expect(result.draft.allocations[1]).toMatchObject({
+      purpose: "advance",
+      counterpartyId: "friend",
+    });
+    expect(result.draft.allocations[1]?.amount.amount).toBe("630");
+  });
+
+  it("splits an explicit unequal amount for a known counterparty", () => {
+    const result = parseTransaction("午餐 1000，朋友欠 400", context);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.amount.amount).toBe("1000");
+    expect(result.draft.allocations).toHaveLength(2);
+    expect(result.draft.allocations[0]).toMatchObject({ purpose: "expense" });
+    expect(result.draft.allocations[0]?.amount.amount).toBe("600");
+    expect(result.draft.allocations[1]).toMatchObject({
+      purpose: "advance",
+      counterpartyId: "friend",
+    });
+    expect(result.draft.allocations[1]?.amount.amount).toBe("400");
+  });
+
+  it("does not produce a zero-amount personal allocation when the whole amount is advanced", () => {
+    const result = parseTransaction("午餐 600，朋友欠 600", context);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.amount.amount).toBe("600");
+    expect(result.draft.allocations).toHaveLength(1);
+    expect(result.draft.allocations[0]).toMatchObject({
+      purpose: "advance",
+      counterpartyId: "friend",
+    });
+    expect(result.draft.allocations[0]?.amount.amount).toBe("600");
+  });
+
+  it("asks for the advance amount when the explicit share exceeds the total", () => {
+    const result = parseTransaction("午餐 500，朋友欠 800", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["advanceShare"]);
+  });
+
+  it("asks for the counterparty when the explicit named payer is unknown", () => {
+    const result = parseTransaction("午餐 1260，小明欠 630", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["counterparty"]);
+  });
+
+  it("leaves a sentence with an unrelated second amount to the amount follow-up", () => {
+    const result = parseTransaction("午餐 120 另加 30", context);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["amount"]);
+  });
 });

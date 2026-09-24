@@ -239,6 +239,54 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
     ...(merchant ? { merchantId: merchant.merchantId } : {}),
   };
 
+  // 不等額分帳（「小明欠 630」）是唯一能表達「每人負擔不同」的輸入方式，必須在
+  // 「僅接受單一金額」的關卡之前攔截，否則指名金額造成的第二個數字會先被那道關卡擋下。
+  // 條件嚴格限縮：只有文字中的數字數量剛好等於「總額 + 每筆指名代墊金額」時才接手，
+  // 像「午餐 120 另加 30」這種沒有「欠」等分帳語句的句子，仍交回既有的金額關卡處理。
+  const explicitShare = parseShare(text, amounts[0]?.value ?? "0");
+  if (explicitShare.kind === "explicit" && amounts.length === explicitShare.shares.length + 1) {
+    const total = money(amounts[0]?.value ?? "", "TWD");
+    const shell = expenseShell(context, text, account, merchant, total)[0];
+    if (!shell) return incomplete(context, text, ["category"], { ...references });
+
+    const advances = explicitShare.shares.map((item, index) => {
+      const counterparty = matchingReferences(item.name, context.counterparties ?? [])[0];
+      return {
+        ...shell,
+        allocationId:
+          context.advanceAllocationIds?.[index] ??
+          `${context.allocationId}-advance-${String(index)}`,
+        purpose: "advance" as const,
+        amount: money(item.amount, "TWD"),
+        ...(counterparty ? { counterpartyId: counterparty.counterpartyId } : {}),
+      };
+    });
+
+    const advanceTotal = advances.reduce(
+      (sum, item) => sum.plus(item.amount.amount),
+      new Decimal(0),
+    );
+    const personal = new Decimal(total.amount).minus(advanceTotal);
+
+    // 代墊合計超過總額：語句自相矛盾，改為追問代墊金額，而不是產生負數配置。
+    if (personal.isNegative()) {
+      return incomplete(context, text, ["advanceShare"], {
+        allocations: [{ ...shell, amount: total }, ...advances],
+        ...references,
+      });
+    }
+
+    // 個人負擔為 0 代表整筆都是代墊，不產生金額為 0 的個人配置（金額必須為正）。
+    const allocations = personal.greaterThan(0)
+      ? [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances]
+      : advances;
+
+    if (advances.some((item) => !item.counterpartyId)) {
+      return incomplete(context, text, ["counterparty"], { allocations, ...references });
+    }
+    return draft(context, text, allocations, references);
+  }
+
   if (amounts.length !== 1) {
     return incomplete(context, text, ["amount"], {
       allocations: expenseShell(context, text, account, merchant),
@@ -306,7 +354,10 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
       new Decimal(0),
     );
     const personal = new Decimal(amount.amount).minus(advanceTotal);
-    const allocations = [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances];
+    // 個人負擔為 0（例如整筆金額只以「X欠<全額>」表達）時不產生金額為 0 的個人配置。
+    const allocations = personal.greaterThan(0)
+      ? [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances]
+      : advances;
 
     if (resolved.length < expected || advances.some((item) => !item.counterpartyId)) {
       return incomplete(context, text, ["counterparty"], { allocations, ...references });
