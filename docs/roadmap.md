@@ -75,6 +75,10 @@
 
 ### M3：對話狀態、多筆輸入與代墊
 
+狀態：拆為 M3a 與 M3b。M3a（批次與對話狀態）已完成（2026-09-21）；M3b（代墊與回收）待進行。
+
+設計：[`docs/domain/conversation-model.md`](domain/conversation-model.md)
+
 交付內容：
 
 - `batch_id` 與一則訊息最多 10 筆草稿。

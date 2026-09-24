@@ -5,6 +5,8 @@ import type Database from "better-sqlite3";
 const migrations = [
   { version: 1, url: new URL("./migrations/0001_initial.sql", import.meta.url) },
   { version: 2, url: new URL("./migrations/0002_accounting_core.sql", import.meta.url) },
+  { version: 3, url: new URL("./migrations/0003_conversation_state.sql", import.meta.url) },
+  { version: 4, url: new URL("./migrations/0004_settings.sql", import.meta.url) },
 ] as const;
 
 export function migrate(database: Database.Database): void {
@@ -27,7 +29,17 @@ export function migrate(database: Database.Database): void {
       assertForeignKeys(database);
       database.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
     });
-    apply.immediate();
+
+    // PRAGMA foreign_keys 在 transaction 內是 no-op，因此必須在進入 transaction 之前
+    // 關閉；重建被其他資料表參照的表（例如 drafts）才不會觸發外鍵違規。
+    // foreign_key_check 不受此開關影響，完整性斷言仍然有效。
+    const foreignKeysEnabled = database.pragma("foreign_keys", { simple: true }) === 1;
+    if (foreignKeysEnabled) database.pragma("foreign_keys = OFF");
+    try {
+      apply.immediate();
+    } finally {
+      if (foreignKeysEnabled) database.pragma("foreign_keys = ON");
+    }
   }
 
   assertForeignKeys(database);

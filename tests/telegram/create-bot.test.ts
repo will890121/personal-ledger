@@ -1,103 +1,15 @@
-import type { Transformer } from "grammy";
-import type { Update } from "grammy/types";
 import { describe, expect, it } from "vitest";
 
-import { createLedgerBot, formatRecentPage } from "../../src/telegram/create-bot.js";
-import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
-import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
-import { FakeReferenceRepository } from "../support/fake-reference-repository.js";
+import { formatRecentPage } from "../../src/telegram/create-bot.js";
+import {
+  callbackUpdate as makeCallbackUpdate,
+  createHarness,
+  getText,
+  messageUpdate,
+} from "../support/telegram-harness.js";
 
-interface ApiCall {
-  readonly method: string;
-  readonly payload: unknown;
-}
-
-function getText(call: ApiCall | undefined): string | undefined {
-  if (!call || typeof call.payload !== "object" || call.payload === null) return undefined;
-  if (!("text" in call.payload) || typeof call.payload.text !== "string") return undefined;
-  return call.payload.text;
-}
-
-function createHarness() {
-  const repository = new FakeLedgerRepository();
-  const calls: ApiCall[] = [];
-  let nextId = 0;
-  const bot = createLedgerBot({
-    token: "123456:test-token",
-    ownerId: "123",
-    repository,
-    referenceRepository: new FakeReferenceRepository(),
-    summaryRepository: { summarize: () => Promise.resolve(summarizeAllocations([])) },
-    generateId: () => `id-${String(++nextId)}`,
-    now: () => new Date("2026-09-18T01:00:00.000Z"),
-    today: () => "2026-09-18",
-    botInfo: {
-      id: 1,
-      is_bot: true,
-      first_name: "Ledger Bot",
-      username: "ledger_bot",
-      can_join_groups: false,
-      can_read_all_group_messages: false,
-      supports_inline_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-      can_manage_bots: false,
-      supports_join_request_queries: false,
-    },
-  });
-  const capture: Transformer = (_previous, method, payload) => {
-    calls.push({ method, payload });
-    return Promise.resolve({ ok: true, result: true } as never);
-  };
-  bot.api.config.use(capture);
-  return { bot, calls, repository };
-}
-
-function messageUpdate(options: {
-  updateId: number;
-  userId?: number;
-  chatType?: "private" | "group";
-  text: string;
-}): Update {
-  const userId = options.userId ?? 123;
-  const chatType = options.chatType ?? "private";
-  const chat =
-    chatType === "private"
-      ? { id: userId, type: "private" as const, first_name: "Owner" }
-      : { id: -100, type: "group" as const, title: "Ledger Test Group" };
-  return {
-    update_id: options.updateId,
-    message: {
-      message_id: options.updateId,
-      date: 1_758_157_200,
-      chat,
-      from: { id: userId, is_bot: false as const, first_name: "Owner" },
-      text: options.text,
-      ...(options.text.startsWith("/")
-        ? { entities: [{ type: "bot_command" as const, offset: 0, length: options.text.length }] }
-        : {}),
-    },
-  };
-}
-
-function callbackUpdate(updateId: number, data: string): Update {
-  return {
-    update_id: updateId,
-    callback_query: {
-      id: `callback-${String(updateId)}`,
-      chat_instance: "instance-1",
-      from: { id: 123, is_bot: false as const, first_name: "Owner" },
-      data,
-      message: {
-        message_id: 10,
-        date: 1_758_157_200,
-        chat: { id: 123, type: "private" as const, first_name: "Owner" },
-        text: "preview",
-      },
-    },
-  };
+function callbackUpdate(updateId: number, data: string) {
+  return makeCallbackUpdate({ updateId, data });
 }
 
 describe("createLedgerBot", () => {

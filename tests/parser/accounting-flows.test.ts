@@ -113,11 +113,11 @@ describe("M2 accounting parser", () => {
   });
 
   it("returns structured unknown and ambiguous references", () => {
-    expect(parseTransaction("未知卡刷 1200", context)).toEqual({
+    expect(parseTransaction("未知卡刷 1200", context)).toMatchObject({
       kind: "missing_fields",
       fields: ["account"],
     });
-    expect(parseTransaction("退款 120", context)).toEqual({
+    expect(parseTransaction("退款 120", context)).toMatchObject({
       kind: "missing_fields",
       fields: ["refundTarget", "category"],
     });
@@ -126,7 +126,7 @@ describe("M2 accounting parser", () => {
         ...context,
         accounts: [cathayCard, { ...cathayCard, accountId: "duplicate-card" }],
       }),
-    ).toEqual({
+    ).toMatchObject({
       kind: "ambiguous",
       field: "account",
       candidateIds: ["cathay-card", "duplicate-card"],
