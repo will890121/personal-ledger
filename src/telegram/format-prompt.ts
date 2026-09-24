@@ -14,6 +14,8 @@ const fieldLabels = {
   account: "帳戶",
   refundTarget: "退款原交易",
   purpose: "用途",
+  counterparty: "交易對象",
+  advanceShare: "代墊金額",
 } as const;
 
 export interface DraftPrompt {

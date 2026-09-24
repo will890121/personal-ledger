@@ -20,6 +20,8 @@ const fieldCodes: Record<ParseField, string> = {
   account: "acc",
   refundTarget: "ref",
   purpose: "pur",
+  counterparty: "cpy",
+  advanceShare: "shr",
 };
 const fieldsByCode = new Map<string, ParseField>(
   Object.entries(fieldCodes).map(([field, code]) => [code, field as ParseField]),
