@@ -337,7 +337,12 @@ export function parseTransaction(text: string, context: ParseContext): ParseResu
           ...(counterparty ? { counterpartyId: counterparty.counterpartyId } : {}),
         };
       });
-      return incomplete(context, text, ["advanceShare"], {
+      // 一次宣告所有已知缺漏：名字不足時 placeholder 沒有 counterpartyId，
+      // 答完 advanceShare 之後還得繼續追問 counterparty，不能等到那時候才發現。
+      const fields: ParseField[] = placeholders.some((item) => !item.counterpartyId)
+        ? ["advanceShare", "counterparty"]
+        : ["advanceShare"];
+      return incomplete(context, text, fields, {
         allocations: [{ ...shell, amount }, ...placeholders],
         ...references,
       });

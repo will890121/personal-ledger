@@ -64,6 +64,10 @@ export type CompleteDraftResult =
   | { readonly kind: "incomplete"; readonly draft: IncompleteDraft };
 
 function applyPatch(partial: PartialDraft, patch: DraftPatch): PartialDraft {
+  // 一次分帳可能有好幾筆代墊配置都缺 counterpartyId（例如三人平分、兩個名字都沒解析到）。
+  // 一個 counterparty 答案只能填其中一筆，否則不同的債務人會被誤填成同一個人——
+  // 靜默產生錯誤資料，比卡住重問更糟。逐人追問時，永遠先補第一筆還缺的。
+  let counterpartyAssigned = false;
   const allocations = partial.allocations.map((allocation) => {
     const next = { ...allocation };
     if (patch.amount && !next.amount) next.amount = patch.amount;
@@ -71,8 +75,14 @@ function applyPatch(partial: PartialDraft, patch: DraftPatch): PartialDraft {
       next.category = patch.category;
       if (patch.categoryId) next.categoryId = patch.categoryId;
     }
-    if (patch.counterpartyId && next.purpose === "advance" && !next.counterpartyId) {
+    if (
+      patch.counterpartyId &&
+      next.purpose === "advance" &&
+      !next.counterpartyId &&
+      !counterpartyAssigned
+    ) {
       next.counterpartyId = patch.counterpartyId;
+      counterpartyAssigned = true;
     }
     return next;
   });
@@ -115,10 +125,22 @@ function satisfied(field: ParseField, patch: DraftPatch): boolean {
   return false;
 }
 
+// counterparty 不能只看 patch 有沒有給值就算滿足：一次分帳可能有好幾筆代墊配置，
+// 一個答案只填得了一筆，必須從套用 patch 之後的實際配置重新推導還缺不缺。
+function hasOutstandingCounterparty(partial: PartialDraft): boolean {
+  return partial.allocations.some(
+    (allocation) => allocation.purpose === "advance" && !allocation.counterpartyId,
+  );
+}
+
 export function completeDraft(draft: IncompleteDraft, patch: DraftPatch): CompleteDraftResult {
   const patched = applyPatch(draft.partial, patch);
   const partial = patch.advanceShare ? applyAdvanceShare(patched, patch.advanceShare) : patched;
-  const pendingFields = draft.pendingFields.filter((item) => !satisfied(item.field, patch));
+  const pendingFields = draft.pendingFields.filter((item) =>
+    item.field === "counterparty"
+      ? hasOutstandingCounterparty(partial)
+      : !satisfied(item.field, patch),
+  );
 
   if (pendingFields.length > 0) {
     return {
