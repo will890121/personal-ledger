@@ -72,7 +72,7 @@ describe("runtime composition", () => {
       ).resolves.toHaveLength(1);
       expect(
         runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
     } finally {
       runtime.close();
     }
@@ -110,7 +110,7 @@ describe("runtime composition", () => {
       });
       expect(
         runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
       categoryCount = (
         runtime.database
           .prepare("SELECT COUNT(*) AS count FROM categories WHERE owner_id = ?")

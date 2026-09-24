@@ -87,6 +87,7 @@ interface AllocationRow {
   subcategory_snapshot: string | null;
   counterparty_id: string | null;
   note: string | null;
+  recovers_allocation_id: string | null;
 }
 interface AuditRow {
   audit_event_id: string;
@@ -672,7 +673,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
     allocations: readonly Allocation[],
   ): void {
     const insert = this.database.prepare(
-      "INSERT INTO allocations (allocation_id, transaction_id, funds_effect, purpose, amount, currency, category_id, category_snapshot, subcategory_snapshot, counterparty_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO allocations (allocation_id, transaction_id, funds_effect, purpose, amount, currency, category_id, category_snapshot, subcategory_snapshot, counterparty_id, note, recovers_allocation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (const item of allocations) {
       const categoryId =
@@ -689,6 +690,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
         item.subcategory ?? null,
         item.counterpartyId ?? null,
         item.note ?? null,
+        item.recoversAllocationId ?? null,
       );
     }
   }
@@ -779,6 +781,9 @@ export class SqliteLedgerRepository implements LedgerRepository {
         ...(item.subcategory_snapshot ? { subcategory: item.subcategory_snapshot } : {}),
         ...(item.counterparty_id ? { counterpartyId: item.counterparty_id } : {}),
         ...(item.note ? { note: item.note } : {}),
+        ...(item.recovers_allocation_id
+          ? { recoversAllocationId: item.recovers_allocation_id }
+          : {}),
       })),
       ...(row.account_from_id ? { accountFromId: row.account_from_id } : {}),
       ...(row.account_to_id ? { accountToId: row.account_to_id } : {}),

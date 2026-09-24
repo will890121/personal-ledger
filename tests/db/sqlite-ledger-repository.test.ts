@@ -26,6 +26,92 @@ const draft: TransactionDraft = {
   status: "awaiting_confirmation",
 };
 
+// 建立一筆含代墊配置的已確認交易，再確認一筆帶 recoversAllocationId 的回收草稿，
+// 用於驗證 recovers_allocation_id 欄位的讀寫往返。
+// 注意：confirmDraft 內部以 randomUUID() 產生 transactionId，無法指定為固定字串，
+// 因此改為回傳實際產生的 recoveryTransactionId 供測試查詢。
+async function setupConfirmedAdvance(): Promise<{
+  repository: SqliteLedgerRepository;
+  recoveryTransactionId: string;
+}> {
+  const advanceDatabase = openDatabase(":memory:");
+  migrate(advanceDatabase);
+  const repository = new SqliteLedgerRepository(advanceDatabase);
+
+  advanceDatabase
+    .prepare(
+      "INSERT INTO counterparties (counterparty_id, owner_id, name, normalized_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("counterparty-1", "owner-1", "朋友", "朋友");
+
+  await repository.recordInputEvent({
+    eventId: "advance-event",
+    ownerId: "owner-1",
+    telegramUpdateId: "advance-update",
+    sourceType: "telegram",
+    sourceRef: "advance-message",
+    rawText: "代墊 120",
+    receivedAt: "2026-09-24T01:00:00.000Z",
+  });
+  await repository.saveDraft({
+    draftId: "advance-draft",
+    ownerId: "owner-1",
+    requestId: "advance-request",
+    sourceEventId: "advance-event",
+    occurredDate: "2026-09-24",
+    amount: { amount: "120", currency: "TWD" },
+    allocations: [
+      {
+        allocationId: "advance-allocation",
+        fundsEffect: "outflow",
+        purpose: "advance",
+        amount: { amount: "120", currency: "TWD" },
+        category: "代墊",
+        counterpartyId: "counterparty-1",
+      },
+    ],
+    status: "awaiting_confirmation",
+  });
+  await repository.confirmDraft("advance-draft", "2026-09-24T01:01:00.000Z", "advance-audit");
+
+  await repository.recordInputEvent({
+    eventId: "recovery-event",
+    ownerId: "owner-1",
+    telegramUpdateId: "recovery-update",
+    sourceType: "telegram",
+    sourceRef: "recovery-message",
+    rawText: "代墊回收 120",
+    receivedAt: "2026-09-24T02:00:00.000Z",
+  });
+  await repository.saveDraft({
+    draftId: "recovery-draft",
+    ownerId: "owner-1",
+    requestId: "recovery-request",
+    sourceEventId: "recovery-event",
+    occurredDate: "2026-09-24",
+    amount: { amount: "120", currency: "TWD" },
+    allocations: [
+      {
+        allocationId: "recovery-allocation",
+        fundsEffect: "inflow",
+        purpose: "advance_recovery",
+        amount: { amount: "120", currency: "TWD" },
+        category: "代墊回收",
+        counterpartyId: "counterparty-1",
+        recoversAllocationId: "advance-allocation",
+      },
+    ],
+    status: "awaiting_confirmation",
+  });
+  const recovery = await repository.confirmDraft(
+    "recovery-draft",
+    "2026-09-24T02:01:00.000Z",
+    "recovery-audit",
+  );
+
+  return { repository, recoveryTransactionId: recovery.transactionId };
+}
+
 describe("SqliteLedgerRepository", () => {
   let database: Database.Database;
   let repository: SqliteLedgerRepository;
@@ -288,5 +374,13 @@ describe("SqliteLedgerRepository", () => {
     expect(database.prepare("SELECT COUNT(*) AS count FROM transactions").get()).toEqual({
       count: 0,
     });
+  });
+
+  it("round-trips the recovery reference on an allocation", async () => {
+    const { repository: advanceRepository, recoveryTransactionId } = await setupConfirmedAdvance();
+
+    const transaction = await advanceRepository.getTransaction("owner-1", recoveryTransactionId);
+
+    expect(transaction?.allocations[0]?.recoversAllocationId).toBe("advance-allocation");
   });
 });
