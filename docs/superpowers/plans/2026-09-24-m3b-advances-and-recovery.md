@@ -1529,7 +1529,56 @@ Expected: FAIL，代墊配置沒有產生。
 
 - [ ] **Step 3：實作**
 
-在 `parseTransaction` 的支出草稿路徑（`expenseShell` 取得非空 shell 之後、回傳 `draft(...)` 之前）插入分帳處理：
+**不等額分帳必須在 `amounts.length !== 1` 關卡之前處理。** `午餐 1260，小明欠 630` 有兩個數字，會被 M1 起就存在的金額關卡攔下，因此 `explicit` 分支在關卡之後永遠不可達。條件嚴格限縮為「數字總數 = 明確金額數量 + 1」，其餘情形不接手：
+
+```ts
+  // 不等額分帳是唯一能表達「每人負擔不同」的輸入方式，必須在金額關卡之前攔截。
+  // 條件嚴格限縮：只有數字數量剛好等於「總額 + 每筆明確代墊」時才接手，
+  // 「午餐 120 另加 30」這類仍然交回既有關卡處理。
+  const explicitShare = parseShare(text, amounts[0]?.value ?? "0");
+  if (
+    explicitShare.kind === "explicit" &&
+    amounts.length === explicitShare.shares.length + 1
+  ) {
+    const total = money(amounts[0]?.value ?? "", "TWD");
+    const shell = expenseShell(context, text, accounts[0], merchants[0], total)[0];
+    if (!shell) return incomplete(context, text, ["category"]);
+
+    const advances = explicitShare.shares.map((item, index) => ({
+      ...shell,
+      allocationId:
+        context.advanceAllocationIds?.[index] ?? `${context.allocationId}-advance-${String(index)}`,
+      purpose: "advance" as const,
+      amount: money(item.amount, "TWD"),
+      ...(matchingReferences(item.name, context.counterparties ?? [])[0]
+        ? {
+            counterpartyId: matchingReferences(item.name, context.counterparties ?? [])[0]
+              ?.counterpartyId,
+          }
+        : {}),
+    }));
+    const advanceTotal = advances.reduce(
+      (sum, item) => sum.plus(item.amount.amount),
+      new Decimal(0),
+    );
+    const personal = new Decimal(total.amount).minus(advanceTotal);
+
+    // 代墊合計超過總額：語句自相矛盾，改為追問代墊金額。
+    if (personal.isNegative()) return incomplete(context, text, ["advanceShare"]);
+
+    // 個人負擔為 0 代表整筆都是代墊，不產生金額為 0 的配置（違反金額必須為正）。
+    const allocations = personal.greaterThan(0)
+      ? [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances]
+      : advances;
+
+    if (advances.some((item) => !item.counterpartyId)) {
+      return incomplete(context, text, ["counterparty"], { allocations });
+    }
+    return draft(context, text, allocations as Allocation[], {});
+  }
+```
+
+在 `parseTransaction` 的支出草稿路徑（`expenseShell` 取得非空 shell 之後、回傳 `draft(...)` 之前）插入平分與除不盡的處理：
 
 ```ts
   const share = parseShare(text, amount.amount);
