@@ -56,6 +56,16 @@ async function applyAnswer(
     result.kind === "draft"
       ? formatPreview(result.draft, references)
       : formatPrompt(result.draft, record.draftRef, references);
+
+  // 由候選按鈕觸發時，就地改寫那則追問訊息；它已經是草稿登記的預覽訊息，
+  // 不必也不該再多留一則帶著舊按鈕的訊息。
+  if (context.callbackQuery) {
+    await context.editMessageText(message.text, {
+      ...(message.replyMarkup ? { reply_markup: message.replyMarkup } : {}),
+    });
+    return;
+  }
+
   const sent = await context.reply(message.text, {
     ...(message.replyMarkup ? { reply_markup: message.replyMarkup } : {}),
   });
@@ -119,6 +129,7 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     const record = await dependencies.repository.getDraftRecord({ draftId });
     if (!record?.draft) {
       await context.answerCallbackQuery({ text: "草稿不存在" });
+      await context.editMessageReplyMarkup();
       return;
     }
     // 跨日草稿不直接入帳：舊訊息裡的按鈕可能在幾天後被誤觸，必須重新預覽並再確認一次。
@@ -130,14 +141,10 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       );
       const preview = formatPreview(record.draft, references);
       await context.answerCallbackQuery({ text: "草稿已跨日，請重新確認" });
-      const sent = await context.reply(
+      // 就地取代舊預覽：留著它等於留下一顆已失效但仍可按的確認鍵。
+      await context.editMessageText(
         [`建立日期：${record.createdDate}`, preview.text].join("\n"),
         { reply_markup: preview.replyMarkup },
-      );
-      await dependencies.repository.setPreviewMessage(
-        draftId,
-        String(sent.chat.id),
-        String(sent.message_id),
       );
       return;
     }

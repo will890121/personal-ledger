@@ -93,6 +93,20 @@ describe("draft routing", () => {
     expect(getText(calls.at(-1))).toContain("總金額：TWD 60");
   });
 
+  it("replaces the prompt in place when answered with a candidate button", async () => {
+    const { bot, calls, repository } = harness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "咖啡 60" }));
+    const draftRef = firstDraftRef(repository);
+    const before = calls.filter((call) => call.method === "sendMessage").length;
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 2, data: `a:${draftRef}:cat:0` }));
+
+    const after = calls.filter((call) => call.method === "sendMessage").length;
+    expect(after).toBe(before);
+    expect(calls.at(-1)?.method).toBe("editMessageText");
+    expect(getText(calls.at(-1))).toContain("總金額：TWD 60");
+  });
+
   it("rejects a non-numeric reply without changing the draft", async () => {
     const { bot, calls, repository } = harness();
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐" }));
