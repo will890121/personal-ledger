@@ -4,7 +4,7 @@
 
 ## 自動驗證
 
-- `pnpm check`：通過，48 個測試檔、294 個測試全數通過；format、typecheck、lint 與 build 通過。
+- `pnpm check`：通過，49 個測試檔、305 個測試全數通過；format、typecheck、lint 與 build 通過。
 - Migration 0005：`allocations` 新增可空欄位 `recovers_allocation_id`（`REFERENCES allocations(allocation_id)`）與索引 `allocations_recovers_idx`、`allocations_purpose_idx`。`schema_migrations` 依序保留版本 1 至 5，重複執行冪等，`foreign_key_check` 無錯誤（`tests/db/migrate-advance-recovery.test.ts`）。既有 M3a 資料（草稿、`confirmed_transaction_id`、`batch_id`）經 migration 0005 後完整保留，未被本次變更觸及。
 - 三種新帳務形狀（`outflow:advance`、`none:advance`、`inflow:advance_recovery`）通過領域驗證；`recovers_allocation_id` 只能出現在 `purpose=advance_recovery` 的配置、代墊必須有交易對象、回收金額不得超過代墊金額，均由 `tests/domain/advance.test.ts`、`tests/domain/ledger.test.ts` 覆蓋。
 - AC-11（分帳建立）：`tests/parser/advance-flows.test.ts` 涵蓋一半／各半／N 個人平分、除不盡追問、明確金額（含全額代墊與超額矛盾）、信用卡代墊（`none:advance`）、未知交易對象追問與當場建立、多人分帳逐人追問。
@@ -18,7 +18,10 @@
 - 回收文字入口：`tests/telegram/recovery-input.test.ts` 涵蓋「小明還 300」「收到小明 300」「小明還我 300」三種寫法、對象沒有未回收代墊時的提示、以及一般敘述句（如「小明還欠我錢」）不被誤判為回收。
 - 切分規則回歸集：`tests/fixtures/parser-corpus.ts` 共 38 筆匿名化語料（`tests/parser/corpus.test.ts`，39 個測試含最低筆數斷言），涵蓋 M2 既有語句、M3a 批次與合併規則、常見誤傳，以及本次新增的 11 筆 M3b 代墊／回收語句，全數通過，包含官方示例寫法「`午餐 1260，小明欠 630`」（逗號 + 指名金額）。
 - `splitInput` 修正：純粹的欠款／代付子句（`X欠<金額>`、`要還<金額>`、`該給<金額>`、`幫X付<金額>`）即使帶著金額數字，也視為前一段的分帳明細併回同一筆交易，不再被誤切成獨立交易；一般兩筆各自完整的交易（如 `午餐 120，咖啡 60`）不受影響。由 `tests/parser/split-input.test.ts` 新增的 5 個測試釘住，含正向案例、回歸保護與「子句夾雜其他內容則不合併」的邊界案例。
-- Docker Compose 設定檢查與 image 建置、容器啟動檢查（migration 0005 套用後正常結束）：**本次未執行**。這兩項需要存取 Docker daemon，依安排由審查者在後續統一處理，非本文件涵蓋範圍內的疏漏。
+- Docker Compose：`docker compose config --quiet` 通過。
+- Docker image：`personal-ledger:m3b` 建置通過，image ID `1d7844cdeb4c`。
+- Container startup：以測試 token、測試 owner ID、暫存 SQLite 路徑及 `LEDGER_STARTUP_CHECK=1` 啟動成功並正常結束，migration 0005 套用無誤。
+- 最終全分支審查：以最強模型審查 33 個 commit 的完整 diff，提出 1 個 Critical 與 3 個 Important，全部修正並經範圍限定複審確認（詳見下方「最終審查發現與修正」）。
 
 ## 人工 Telegram 驗收
 
@@ -39,6 +42,17 @@
 - **阿拉伯數字人數的「N 個人平分」與金額掃描衝突（裁定不修）**：`COUNT_PATTERN` 的正則表達式支援 `[0-9]+ 個人平分`（如「3個人平分」），但 `parseAmountCandidates` 會把其中的阿拉伯數字誤認成第二個金額候選，導致落入既有的「金額不明」追問而非分帳路徑。中文數字寫法（「三個人平分」）不受影響。症狀是多一次追問，不會產生錯誤資料，嚴重度遠低於前述的分帳語意遺失問題；修法需要調整既有的金額掃描邏輯，在里程碑末期引入的風險大於效益，裁定不修，改由 README 要求使用中文數字。
 - 不含金額的段落一律併回前一段，此為 M3a 既有規則，M3b 未變動。
 
+## 最終審查發現與修正
+
+全分支審查在 15 輪單任務審查之後執行，發現四項單任務審查照不到的接縫問題，均已修正並補上回歸測試：
+
+1. **分帳路徑缺「待分類」後援殼（Critical）**：`聚餐 1260，我先付，朋友欠一半`（AC-11 官方語句）因為「聚餐」推導不出分類，分帳路徑回傳空配置而被降級為「無法解析」。非分帳路徑本有後援殼，分帳路徑漏了。已抽共用後援殼函式。此缺陷的語句**當時已在回歸語料中且為綠**——因為語料只斷言 `ParseResult` 的種類，區分不出「帶可用配置殼」與「帶空配置」。語料斷言已一併提升為同時檢查配置筆數。
+2. **explicit 分帳路徑跨過退款與信用卡關卡（Important）**：`午餐 1260 刷卡，朋友欠 630` 被記成 `outflow:advance` 而非 `none:advance`，污染實際流出；同語意的「一半」寫法卻正確追問帳戶。已抽 guard 函式讓兩條路徑通過同一組關卡，並共用代墊配置建構函式。
+3. **交易對象追問對新使用者是死路（Important）**：候選為空時只顯示「請選擇：」配空鍵盤，文案未提可回覆輸入新名稱。已補上指示。
+4. **回收金額格式錯誤後的提示與行為矛盾（Important）**：訊息邀請重試，重試卻落入其他路徑產生垃圾草稿。已改為指引重新從 `/advances` 開始。
+
+另新增 `tests/telegram/advance-chain.test.ts`，貫穿「建立分帳 → 確認入帳 → 部分回收 → 放棄剩餘」完整鏈路並斷言配置合計精確等於交易總額。先前每個任務只測自己那一段，沒有測試走過接縫。
+
 ## 結論
 
-自動驗證全部通過（`pnpm check` 全綠、AC-11 至 AC-14 對應的自動測試通過、刪除保護與統計語意雙口徑均有測試覆蓋，含 `splitInput` 遺失代墊語意問題的修正與回歸測試）。Docker 建置與容器啟動檢查、以及人工 Telegram 驗收尚未執行，M3b 在這三項完成前不算結案。「已知限制」列出的阿拉伯數字人數問題裁定不修，已於 README 註明替代寫法。
+自動驗證與程式審查全部通過（`pnpm check` 全綠、AC-11 至 AC-14 對應的自動測試通過、刪除保護與統計語意雙口徑均有測試覆蓋、Docker 建置與容器啟動檢查通過、最終全分支審查發現的四項問題均已修正並複審確認）。人工 Telegram 驗收尚未執行，M3b 在該項完成前不算結案。「已知限制」列出的阿拉伯數字人數問題裁定不修，已於 README 註明替代寫法。
