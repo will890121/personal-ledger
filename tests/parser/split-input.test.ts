@@ -27,4 +27,27 @@ describe("splitInput", () => {
     expect(splitInput("  午餐 120，，  ")).toEqual(["午餐 120"]);
     expect(splitInput("   ")).toEqual([]);
   });
+
+  it("merges a pure owed-amount clause into the previous segment despite carrying a number", () => {
+    expect(splitInput("午餐 1260，小明欠 630")).toEqual(["午餐 1260，小明欠 630"]);
+  });
+
+  it("merges a pure pays-for-someone clause into the previous segment despite carrying a number", () => {
+    expect(splitInput("午餐 1260，幫小華付 500")).toEqual(["午餐 1260，幫小華付 500"]);
+  });
+
+  it("still splits two ordinary amount-bearing transactions", () => {
+    expect(splitInput("午餐 120，咖啡 60")).toEqual(["午餐 120", "咖啡 60"]);
+  });
+
+  it("still merges a name-only sharing clause without an amount", () => {
+    expect(splitInput("聚餐 1260，我先付，朋友欠一半")).toEqual(["聚餐 1260，我先付，朋友欠一半"]);
+  });
+
+  it("does not merge a segment that owes an amount but also carries other content", () => {
+    expect(splitInput("午餐 120，小明欠 630 加小費 50")).toEqual([
+      "午餐 120",
+      "小明欠 630 加小費 50",
+    ]);
+  });
 });

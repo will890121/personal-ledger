@@ -53,22 +53,18 @@ export const parserCorpus: readonly CorpusCase[] = [
   { input: "吃飯", segments: 1, outcomes: ["missing_fields"] },
 
   // M3b 代墊語句
-  // 附註：brief 原給的「午餐 1260，小明欠 630」（逗號 + 指名金額）刻意不收錄。
-  // splitInput 依「含數字的段落一律不與前段合併」規則，會把它切成「午餐 1260」
-  // 「小明欠 630」兩段，代墊語意整個消失——第一段被當成 1260 元的個人午餐草稿
-  // 直接可確認，第二段只落在缺分類的追問。這與設計 §5.1「明確金額是不等額分帳
-  // 唯一輸入方式」矛盾，是實作缺陷而非語料期望值需要調整，已在任務報告的「疑慮」
-  // 一節提出。下面改以空格銜接的等義語句驗證同一條解析路徑，避免把已知問題
-  // 誤記為正確行為。
+  // splitInput 對純粹的欠款／代付子句（如「小明欠 630」）併回前一段，即使該子句
+  // 本身帶著金額數字：那筆錢不是使用者付出去的，是分帳明細，「午餐 1260，
+  // 小明欠 630」是一筆交易而不是兩筆。此規則已修正並由 split-input.test.ts 釘住。
   { input: "午餐 1260，朋友欠一半", segments: 1, outcomes: ["draft"] },
-  { input: "午餐 600 朋友欠600", segments: 1, outcomes: ["draft"] },
-  { input: "午餐 500 朋友欠800", segments: 1, outcomes: ["missing_fields"] },
-  { input: "午餐 1260 小明欠 630", segments: 1, outcomes: ["draft"] },
+  { input: "午餐 600，朋友欠600", segments: 1, outcomes: ["draft"] },
+  { input: "午餐 500，朋友欠800", segments: 1, outcomes: ["missing_fields"] },
+  { input: "午餐 1260，小明欠 630", segments: 1, outcomes: ["draft"] },
   { input: "午餐 999，小明欠一半", segments: 1, outcomes: ["missing_fields"] },
   { input: "聚餐 1260 國泰卡，朋友欠一半", segments: 1, outcomes: ["draft"] },
   { input: "午餐 1000，三個人平分", segments: 1, outcomes: ["missing_fields"] },
   { input: "午餐 900，三個人平分", segments: 1, outcomes: ["missing_fields"] },
-  { input: "午餐 1260 陌生人欠630", segments: 1, outcomes: ["missing_fields"] },
+  { input: "午餐 1260，陌生人欠630", segments: 1, outcomes: ["missing_fields"] },
   { input: "小明還 300", segments: 1, outcomes: ["missing_fields"] },
   { input: "收到小明 300", segments: 1, outcomes: ["missing_fields"] },
 ];

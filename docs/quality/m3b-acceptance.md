@@ -4,7 +4,7 @@
 
 ## 自動驗證
 
-- `pnpm check`：通過，48 個測試檔、289 個測試全數通過；format、typecheck、lint 與 build 通過。
+- `pnpm check`：通過，48 個測試檔、294 個測試全數通過；format、typecheck、lint 與 build 通過。
 - Migration 0005：`allocations` 新增可空欄位 `recovers_allocation_id`（`REFERENCES allocations(allocation_id)`）與索引 `allocations_recovers_idx`、`allocations_purpose_idx`。`schema_migrations` 依序保留版本 1 至 5，重複執行冪等，`foreign_key_check` 無錯誤（`tests/db/migrate-advance-recovery.test.ts`）。既有 M3a 資料（草稿、`confirmed_transaction_id`、`batch_id`）經 migration 0005 後完整保留，未被本次變更觸及。
 - 三種新帳務形狀（`outflow:advance`、`none:advance`、`inflow:advance_recovery`）通過領域驗證；`recovers_allocation_id` 只能出現在 `purpose=advance_recovery` 的配置、代墊必須有交易對象、回收金額不得超過代墊金額，均由 `tests/domain/advance.test.ts`、`tests/domain/ledger.test.ts` 覆蓋。
 - AC-11（分帳建立）：`tests/parser/advance-flows.test.ts` 涵蓋一半／各半／N 個人平分、除不盡追問、明確金額（含全額代墊與超額矛盾）、信用卡代墊（`none:advance`）、未知交易對象追問與當場建立、多人分帳逐人追問。
@@ -16,7 +16,8 @@
 - 統計語意：`src/domain/ledger-summary.ts`（`summarizeAllocations`）自 M3b 分支起未被修改；`tests/domain/advance-summary.test.ts` 以固定資料證明代墊計入實際流出但不計入個人消費、回收計入實際流入但不計入個人收入，分類排名不含代墊。
 - `/advances`：`tests/telegram/advances-command.test.ts` 涵蓋依交易對象分組、分頁與關閉清單、記錄收款的追問與短碼失效處理、放棄回收的二次確認與清單即時重繪、待回收狀態不劫持不相關的純數字或草稿回覆。
 - 回收文字入口：`tests/telegram/recovery-input.test.ts` 涵蓋「小明還 300」「收到小明 300」「小明還我 300」三種寫法、對象沒有未回收代墊時的提示、以及一般敘述句（如「小明還欠我錢」）不被誤判為回收。
-- 切分規則回歸集：`tests/fixtures/parser-corpus.ts` 共 38 筆匿名化語料（`tests/parser/corpus.test.ts`，39 個測試含最低筆數斷言），涵蓋 M2 既有語句、M3a 批次與合併規則、常見誤傳，以及本次新增的 11 筆 M3b 代墊／回收語句，全數通過。詳見下方「已知限制」對其中一筆已知問題的說明。
+- 切分規則回歸集：`tests/fixtures/parser-corpus.ts` 共 38 筆匿名化語料（`tests/parser/corpus.test.ts`，39 個測試含最低筆數斷言），涵蓋 M2 既有語句、M3a 批次與合併規則、常見誤傳，以及本次新增的 11 筆 M3b 代墊／回收語句，全數通過，包含官方示例寫法「`午餐 1260，小明欠 630`」（逗號 + 指名金額）。
+- `splitInput` 修正：純粹的欠款／代付子句（`X欠<金額>`、`要還<金額>`、`該給<金額>`、`幫X付<金額>`）即使帶著金額數字，也視為前一段的分帳明細併回同一筆交易，不再被誤切成獨立交易；一般兩筆各自完整的交易（如 `午餐 120，咖啡 60`）不受影響。由 `tests/parser/split-input.test.ts` 新增的 5 個測試釘住，含正向案例、回歸保護與「子句夾雜其他內容則不合併」的邊界案例。
 - Docker Compose 設定檢查與 image 建置、容器啟動檢查（migration 0005 套用後正常結束）：**本次未執行**。這兩項需要存取 Docker daemon，依安排由審查者在後續統一處理，非本文件涵蓋範圍內的疏漏。
 
 ## 人工 Telegram 驗收
@@ -35,10 +36,9 @@
 
 ## 已知限制
 
-- **明確金額分帳搭配逗號會遺失代墊語意（未修正，待審查裁定）**：設計文件 §5.1 的示例寫法「`午餐 1260，小明欠 630`」，在真實訊息處理管線中會先經過 `splitInput` 切分多筆交易。`splitInput` 的合併規則是「不含數字的片段才併回前一段」，而「小明欠 630」本身含有金額數字，因此會被切成獨立的第二段，而不是與「午餐 1260」合併成同一筆交易。結果是：第一段被解析成一筆 1260 元的個人午餐草稿（可直接確認，代墊完全消失），第二段則落在缺分類的追問、且與代墊無關。這與設計「明確金額是不等額分帳唯一輸入方式」矛盾。以空格銜接的等義寫法（`午餐 1260 小明欠 630`）不受影響，可正確解析為代墊分帳。回歸語料（`tests/fixtures/parser-corpus.ts`）已刻意不收錄逗號寫法，避免把此已知問題誤記為正確行為，改以空格寫法驗證同一條解析路徑；README 的代墊小節已依實測結果說明正確寫法。是否修正 `splitInput` 或改口令使用者一律以空格銜接，留待審查裁定。
-- **阿拉伯數字人數的「N 個人平分」與金額掃描衝突**：`COUNT_PATTERN` 的正則表達式支援 `[0-9]+ 個人平分`（如「3個人平分」），但 `parseAmountCandidates` 會把其中的阿拉伯數字誤認成第二個金額候選，導致落入既有的「金額不明」追問而非分帳路徑。中文數字寫法（「三個人平分」）不受影響。影響範圍較小（自然中文較常用中文數字），未收錄進回歸語料，一併留待審查裁定是否修正。
+- **阿拉伯數字人數的「N 個人平分」與金額掃描衝突（裁定不修）**：`COUNT_PATTERN` 的正則表達式支援 `[0-9]+ 個人平分`（如「3個人平分」），但 `parseAmountCandidates` 會把其中的阿拉伯數字誤認成第二個金額候選，導致落入既有的「金額不明」追問而非分帳路徑。中文數字寫法（「三個人平分」）不受影響。症狀是多一次追問，不會產生錯誤資料，嚴重度遠低於前述的分帳語意遺失問題；修法需要調整既有的金額掃描邏輯，在里程碑末期引入的風險大於效益，裁定不修，改由 README 要求使用中文數字。
 - 不含金額的段落一律併回前一段，此為 M3a 既有規則，M3b 未變動。
 
 ## 結論
 
-自動驗證全部通過（`pnpm check` 全綠、AC-11 至 AC-14 對應的自動測試通過、刪除保護與統計語意雙口徑均有測試覆蓋）。Docker 建置與容器啟動檢查、以及人工 Telegram 驗收尚未執行，M3b 在這三項完成前不算結案。「已知限制」列出的兩個分帳語句解析問題（逗號寫法遺失代墊語意、阿拉伯數字人數與金額掃描衝突）留待審查裁定是否需要在結案前修正。
+自動驗證全部通過（`pnpm check` 全綠、AC-11 至 AC-14 對應的自動測試通過、刪除保護與統計語意雙口徑均有測試覆蓋，含 `splitInput` 遺失代墊語意問題的修正與回歸測試）。Docker 建置與容器啟動檢查、以及人工 Telegram 驗收尚未執行，M3b 在這三項完成前不算結案。「已知限制」列出的阿拉伯數字人數問題裁定不修，已於 README 註明替代寫法。
