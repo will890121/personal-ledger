@@ -2527,8 +2527,28 @@ git commit -m "docs: record m3b acceptance evidence"
 
 ## 完成定義
 
-- AC-11 至 AC-14 的自動測試通過，人工 Telegram 驗收完成並記錄於 `docs/quality/m3b-acceptance.md`。
+依序完成下列三道關卡，任一道未過就不算結案：
+
+### 關卡一：自動驗證
+
+- AC-11 至 AC-14 的自動測試通過。
 - `pnpm check` 全綠；Docker 建置與啟動檢查通過。
+
+### 關卡二：程式審查
+
+- Task 15 完成後、人工驗收之前，對整個分支的 diff 執行 `superpowers:requesting-code-review`。
+- 審查意見依 `superpowers:receiving-code-review` 處理：每一條都要判斷是否成立，不盲目照做，也不無視。
+- 需要修正的項目補上回歸測試後再重跑關卡一。
+
+M3a 的經驗是這道關卡的理由：當時沒有程式審查，四個互動缺陷全數由人工驗收才發現。審查未必抓得到體驗問題，但「封存後沒有重繪清單」這類在 handler 裡讀得出來的漏洞，應該在進人工驗收之前就被攔下。
+
+### 關卡三：人工 Telegram 驗收
+
+- 於真實資料的**複本**上執行，結束後刪除複本，正式帳本不得留下測試資料。
+- 逐項完成 `docs/quality/m3b-acceptance.md` 的人工清單並記錄結果。
+- 驗收期間發現的缺陷一律補上回歸測試後再修，不得只修行為。
+
+### 其餘條件
 - 既有 M3a 資料經 migration 0005 後完整保留，`foreign_key_check` 無錯誤。
 - 任何金額加總都不經過 SQL `sum()`，一律以 Decimal 計算。
 - `/advances` 可列出、收款與放棄；帶回收關聯的代墊交易無法被軟刪除。
