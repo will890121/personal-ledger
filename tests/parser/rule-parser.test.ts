@@ -192,4 +192,45 @@ describe("parseTransaction", () => {
     if (seeded.kind !== "draft" || unseeded.kind !== "draft") return;
     expect(unseeded.draft.allocations[0]?.category).toBe(seeded.draft.allocations[0]?.category);
   });
+  it("lets an explicit keyword win over a registered merchant", () => {
+    // 商家是店家層級的粗略訊號（Uber 同時有乘車與外送，商家表因此連 subcategory 都不給），
+    // 使用者打出的「外送」是他當下明確說出的事實。反過來的話 `Uber 外送 250` 會變成
+    // 交通、欄位齊全、不追問——正是這次要消滅的「自信的錯答案」。
+    const withMerchant = {
+      ...bootstrappedContext,
+      categories: [
+        ...bootstrappedContext.categories,
+        {
+          categoryId: "category-transport",
+          ownerId: "123",
+          key: "expense_transport",
+          name: "交通",
+          kind: "expense" as const,
+          parentId: "category-expense",
+          depth: 2 as const,
+          active: true,
+        },
+      ],
+      merchants: [{ merchantId: "merchant-uber", ownerId: "123", name: "Uber", active: true }],
+    };
+
+    const withKeyword = parseTransaction("Uber 外送 250", withMerchant);
+    expect(withKeyword.kind).toBe("draft");
+    if (withKeyword.kind !== "draft") return;
+    expect(withKeyword.draft.allocations[0]).toMatchObject({
+      categoryId: "category-dining",
+      category: "餐飲",
+      subcategory: "外送",
+    });
+
+    // 沒有關鍵字時商家才決定分類，且刻意不帶品項。
+    const merchantOnly = parseTransaction("Uber 245", withMerchant);
+    expect(merchantOnly.kind).toBe("draft");
+    if (merchantOnly.kind !== "draft") return;
+    expect(merchantOnly.draft.allocations[0]).toMatchObject({
+      categoryId: "category-transport",
+      category: "交通",
+    });
+    expect(merchantOnly.draft.allocations[0]?.subcategory).toBeUndefined();
+  });
 });

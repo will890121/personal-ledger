@@ -206,7 +206,7 @@ const counterparties: Counterparty[] = [
 ];
 
 const categories: Category[] = [
-  ["expense_dining", "午餐"],
+  ["expense_dining", "餐飲"],
   ["expense_transport", "交通"],
   ["expense_financial_fee", "金融費用"],
   ["income_salary", "薪資"],

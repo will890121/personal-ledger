@@ -5,6 +5,7 @@ import {
   categoryKeywords,
   matchCategoryKeyword,
   matchMerchantCategory,
+  orderedKeywords,
 } from "../../src/parser/category-keywords.js";
 
 describe("matchCategoryKeyword", () => {
@@ -31,11 +32,43 @@ describe("matchCategoryKeyword", () => {
     });
   });
 
-  it("prefers the longest matching keyword", () => {
-    // 「看醫生」與「醫」若同時在表裡，短的不得搶走長的；這條守住比對順序。
-    expect(matchCategoryKeyword("看醫生 350")).toEqual({
-      categoryKey: "expense_medical",
-      subcategory: "看診",
+  it("prefers the longest matching keyword over a shorter one nested inside it", () => {
+    // 「水電」是「水電費」的子字串，兩者都會命中，長的必須贏。
+    expect(matchCategoryKeyword("水電費 1200")).toEqual({
+      categoryKey: "expense_housing",
+      subcategory: "水電費",
+    });
+    expect(matchCategoryKeyword("水電 1200")).toEqual({
+      categoryKey: "expense_housing",
+      subcategory: "水電",
+    });
+  });
+
+  it("scans keywords from longest to shortest", () => {
+    // 直接咬住比較子本身。只靠行為測試很脆弱：表裡巢狀關鍵字很少，把排序反向後
+    // 整份測試仍可能全綠，那條規則就等於沒有被守住。
+    const lengths = orderedKeywords.map((entry) => entry.keyword.length);
+
+    expect(lengths).toEqual([...lengths].sort((a, b) => b - a));
+    expect(Math.max(...lengths)).toBeGreaterThan(Math.min(...lengths));
+  });
+
+  it("breaks a same-length tie by table order", () => {
+    // 「水電」與「電費」同長且同時命中「水電費」的前綴情境之外的句子；表序決定勝負，
+    // 因此新增關鍵字時的排列位置是有意義的。
+    const table = categoryKeywords.map((entry) => entry.keyword);
+    expect(table.indexOf("水電")).toBeLessThan(table.indexOf("電費"));
+    expect(matchCategoryKeyword("這個月水電電費 1200")).toEqual({
+      categoryKey: "expense_housing",
+      subcategory: "水電",
+    });
+  });
+
+  it("maps a standalone fee to 金融費用", () => {
+    // 轉帳分支會自己拆出 fee 配置並直接回傳，走不到這張表；單獨的手續費才需要它。
+    expect(matchCategoryKeyword("手續費 15 現金")).toEqual({
+      categoryKey: "expense_financial_fee",
+      subcategory: "手續費",
     });
   });
 

@@ -179,6 +179,10 @@ export class SqliteReferenceRepository implements ReferenceRepository {
     // 升級上來的帳本留著 migration 建的舊 id，全新安裝則是 bootstrap 自己組的。
     // 只看 category_id 判斷衝突的話，bootstrap 在升級過的帳本上會撞 UNIQUE 而讓整個
     // 啟動失敗。既有的 key 一律沿用它自己的 id。
+    //
+    // 契約：傳入的 categoryId 只在「這個 key 還不存在」時才被採用。若 key 已屬於另一列，
+    // 寫入的是那一列，呼叫端傳的 id 會被忽略且沒有回傳值可察覺——目前沒有呼叫端依賴
+    // 「寫完之後用自己傳的 id 查得到」，要新增這種用法的話請改用 findCategoryByKey。
     const existing = this.database
       .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
       .get(parsed.ownerId, parsed.key) as { category_id: string } | undefined;

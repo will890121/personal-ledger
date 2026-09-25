@@ -5,7 +5,11 @@ import type { BatchItem } from "../application/create-batch.js";
 import type { ReferenceSnapshot } from "../application/reference-data.js";
 import { encodeCallback } from "./callback-data.js";
 
-const MAX_CANDIDATES = 10;
+// 上限必須大於實際的第二層支出分類數（category-catalog 目前 12 個，加上由 M1 帶上來的
+// legacy 分類還會更多），否則「不猜、改追問」這條路自己表達不出完整的分類表：候選依
+// key 排序後截斷，排在後面的「旅遊」「待分類」會連按鈕都沒有，而分類追問只收按鈕、
+// 文字回覆會被當成金額退回。仍然保留上限，是因為交易對象的數量沒有天花板。
+const MAX_CANDIDATES = 24;
 const BUTTONS_PER_ROW = 2;
 
 const fieldLabels = {

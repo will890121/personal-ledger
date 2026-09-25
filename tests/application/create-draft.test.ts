@@ -151,7 +151,7 @@ describe("createDraft", () => {
       categoryId: "lunch",
       ownerId: "123",
       key: "expense_dining",
-      name: "午餐",
+      name: "餐飲",
       kind: "expense",
       parentId: "expense",
       depth: 2,

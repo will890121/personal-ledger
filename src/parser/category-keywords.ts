@@ -25,8 +25,9 @@ export interface CategoryKeyword extends CategoryMatch {
  * subcategory 一律填「比關鍵字更規範的品項名」，不得等於分類自己的名稱——M2 正是
  * 因為 category 與 subcategory 都是「午餐」才在預覽印出「午餐／午餐」。
  *
- * 「手續費」不在表內：轉帳路徑已經會拆出 fee 配置（`台新轉國泰 1000 手續費 15`），
- * 再讓它命中支出分類只會兩邊搶同一句話。
+ * 「手續費」與轉帳不衝突：`台新轉國泰 1000 手續費 15` 由轉帳分支自己拆出 fee 配置並
+ * 直接回傳，根本走不到 expenseShell，兩邊不會搶同一句話。單獨的「手續費 15 現金」則
+ * 需要這張表才分得出金融費用。
  */
 const keywordTable: readonly CategoryKeyword[] = [
   { keyword: "早餐", categoryKey: "expense_dining", subcategory: "早餐" },
@@ -45,13 +46,20 @@ const keywordTable: readonly CategoryKeyword[] = [
   { keyword: "火車", categoryKey: "expense_transport", subcategory: "火車" },
   { keyword: "加油", categoryKey: "expense_transport", subcategory: "加油" },
   { keyword: "停車", categoryKey: "expense_transport", subcategory: "停車" },
+  { keyword: "車票", categoryKey: "expense_transport", subcategory: "車票" },
 
   { keyword: "房租", categoryKey: "expense_housing", subcategory: "房租" },
   { keyword: "水電", categoryKey: "expense_housing", subcategory: "水電" },
+  // 與「水電」構成巢狀關鍵字：長關鍵字優先的規則因此有實際可觀察的效果，
+  // tests/parser/category-keywords.test.ts 以這一對咬住比對順序。
+  { keyword: "水電費", categoryKey: "expense_housing", subcategory: "水電費" },
   { keyword: "電費", categoryKey: "expense_housing", subcategory: "電費" },
   { keyword: "水費", categoryKey: "expense_housing", subcategory: "水費" },
   { keyword: "瓦斯", categoryKey: "expense_housing", subcategory: "瓦斯" },
   { keyword: "管理費", categoryKey: "expense_housing", subcategory: "管理費" },
+  { keyword: "電話費", categoryKey: "expense_housing", subcategory: "電話費" },
+  { keyword: "手機費", categoryKey: "expense_housing", subcategory: "電話費" },
+  { keyword: "網路費", categoryKey: "expense_housing", subcategory: "網路費" },
 
   { keyword: "電影", categoryKey: "expense_entertainment", subcategory: "電影" },
   { keyword: "KTV", categoryKey: "expense_entertainment", subcategory: "KTV" },
@@ -79,6 +87,10 @@ const keywordTable: readonly CategoryKeyword[] = [
   { keyword: "衣服", categoryKey: "expense_shopping", subcategory: "衣著" },
   { keyword: "鞋子", categoryKey: "expense_shopping", subcategory: "衣著" },
   { keyword: "日用品", categoryKey: "expense_shopping", subcategory: "日用品" },
+
+  { keyword: "手續費", categoryKey: "expense_financial_fee", subcategory: "手續費" },
+  { keyword: "匯費", categoryKey: "expense_financial_fee", subcategory: "匯費" },
+  { keyword: "年費", categoryKey: "expense_financial_fee", subcategory: "年費" },
 ];
 
 /**
@@ -104,6 +116,12 @@ for (const entry of keywordTable) {
 const byLengthDescending = [...keywordTable].sort((a, b) => b.keyword.length - a.keyword.length);
 
 export const categoryKeywords = keywordTable;
+
+/**
+ * 比對時實際採用的順序。匯出它是為了讓「長關鍵字優先」可以被直接斷言：表裡目前只有
+ * 少數巢狀關鍵字，光靠行為測試很容易寫成空轉的斷言（把比較子反向排序仍然全綠）。
+ */
+export const orderedKeywords: readonly CategoryKeyword[] = byLengthDescending;
 
 export function matchCategoryKeyword(text: string): CategoryMatch | undefined {
   const hit = byLengthDescending.find((entry) => text.includes(entry.keyword));

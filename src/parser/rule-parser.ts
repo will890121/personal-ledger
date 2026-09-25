@@ -116,9 +116,13 @@ function draft(
 }
 
 /**
- * 支出配置殼。分類一律由對照表決定：商家優先（商家是比關鍵字更強的訊號），其次是
- * 句子裡的關鍵字，兩者都對不上就回空陣列，交給 fallbackExpenseShell 的「待分類」殼去
- * 追問。
+ * 支出配置殼。分類一律由對照表決定：**句子裡的關鍵字優先**，沒有關鍵字才用商家對照表，
+ * 兩者都對不上就回空陣列，交給 fallbackExpenseShell 的「待分類」殼去追問。
+ *
+ * 關鍵字必須贏過商家：商家是店家層級的粗略訊號（Uber 同時有乘車與外送，所以它在
+ * 商家表裡連 subcategory 都不敢給），而使用者打出的「外送」「晚餐」是他當下明確說出的
+ * 事實。反過來讓商家覆蓋關鍵字，`Uber 外送 250` 會被判成交通，而且欄位齊全、不會追問，
+ * 正是這次要消滅的那種「自信的錯答案」。
  *
  * 這裡刻意**不看帳戶**。M2 的版本是「沒有關鍵字但有帳戶就預設午餐」，於是
  * 「早餐 100 現金」「國泰卡刷 1200」都被靜靜記成午餐，而且欄位齊全、連追問都沒有，
@@ -132,7 +136,7 @@ function expenseShell(
   amount?: Money,
 ): PartialAllocation[] {
   const match =
-    (merchant ? matchMerchantCategory(merchant.name) : undefined) ?? matchCategoryKeyword(text);
+    matchCategoryKeyword(text) ?? (merchant ? matchMerchantCategory(merchant.name) : undefined);
   if (!match) return [];
   return [
     {
@@ -141,7 +145,8 @@ function expenseShell(
       purpose: "expense",
       ...(amount ? { amount } : {}),
       // 後援名稱取自 category-catalog，與 bootstrap 種的名稱同一份定義；兩邊各寫一份
-      // 正是「午餐／午餐」躲過所有測試的原因。
+      // 正是「午餐／午餐」躲過所有測試的原因。`?? match.categoryKey` 實際上不可達
+      // （category-keywords 在模組載入時就驗證過每個 key），留著只是為了滿足型別。
       ...category(context, match.categoryKey, categoryName(match.categoryKey) ?? match.categoryKey),
       ...(match.subcategory ? { subcategory: match.subcategory } : {}),
     },

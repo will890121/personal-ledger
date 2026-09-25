@@ -11,7 +11,7 @@ function setup() {
     categoryId: "category-lunch",
     ownerId: "owner-1",
     key: "expense_dining",
-    name: "午餐",
+    name: "餐飲",
     kind: "expense",
     parentId: "category-expense",
     depth: 2,

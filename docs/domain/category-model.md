@@ -64,7 +64,18 @@ migration `0006_dining_category.sql` 把那一列改名為 `expense_dining` / �
 
 ## 已知限制
 
-- 追問分類的候選按鈕上限 10 個（`format-prompt.ts` 的 `MAX_CANDIDATES`），而線上有 13 個
-  depth 2 支出分類，依 `ORDER BY key` 排序後「旅遊」「待分類」與 legacy 的「轉帳」選不到；
-  分類追問也只接受按鈕，文字回覆會被當成金額。
+- **子字串比對沒有詞界**。中文沒有空白分詞，因此「幫朋友加油打氣 100」會命中「加油」而
+  被判成交通，且不會追問。這類誤判在記帳語句裡頻率低，目前接受；真要收斂需要斷詞，
+  代價遠高於收益。
 - 品項（`subcategory`）沒有正規化清單，統計只能按分類彙總。
+- `bootstrapReferenceData` 寫入葉分類時，`parentId` 仍是用 `m2:<owner>:expense` 這個樣板
+  組出來的，而不是按 key 查根分類。目前不會出錯（migration 0002 與 `ensureLegacyCategory`
+  用的都是同一個字串）；若哪天根分類的 id 不同，bootstrap 會以 `FOREIGN KEY constraint
+  failed` 整批失敗、不寫入任何東西——會壞，但壞得很大聲，不會產生半套資料。
+- migration 0006 假設一個帳本不會同時擁有 `expense_dining_lunch` 與 `expense_dining` 兩個
+  key。人工造出這個狀態的話，migration 會以 `UNIQUE constraint failed` 整份 rollback 並停在
+  版本 5，不會半途升級。出貨的程式走不到這個狀態（0006 必定早於新版 bootstrap）。
+- 追問分類的候選按鈕上限是 `format-prompt.ts` 的 `MAX_CANDIDATES`。它必須大於實際的
+  depth 2 支出分類數，否則「不猜、改追問」這條路自己表達不出完整的分類表；分類追問只
+  接受按鈕，文字回覆會被當成金額退回，使用者會無路可走。`format-prompt.test.ts` 用
+  `expenseCategoryLeaves` 咬住「每個分類都有按鈕」。
