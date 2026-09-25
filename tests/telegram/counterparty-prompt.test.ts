@@ -15,7 +15,7 @@ function seedDiningCategory(referenceRepository: FakeReferenceRepository): void 
   referenceRepository.categories.push({
     categoryId: "category-lunch",
     ownerId: "123",
-    key: "expense_dining_lunch",
+    key: "expense_dining",
     name: "午餐",
     kind: "expense",
     parentId: "category-expense",

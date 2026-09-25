@@ -23,7 +23,13 @@ export const parserCorpus: readonly CorpusCase[] = [
   { input: "薪水 +85000", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
   { input: "昨天 Uber 245 國泰卡", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
   { input: "台新轉國泰 5000", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
-  { input: "國泰卡刷 1200", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
+  // 帳戶不再暗示分類：句子只說了刷哪張卡、沒說買什麼，就該追問而不是預設成餐飲。
+  {
+    input: "國泰卡刷 1200",
+    segments: 1,
+    outcomes: ["missing_fields"],
+    allocationCounts: [1],
+  },
   { input: "繳國泰卡 18000 從台新", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
   // 本金與手續費各一筆配置。
   { input: "台新轉國泰 1000 手續費 15", segments: 1, outcomes: ["draft"], allocationCounts: [2] },
@@ -38,10 +44,10 @@ export const parserCorpus: readonly CorpusCase[] = [
     allocationCounts: [1, 1],
   },
   {
-    input: "午餐 120，Uber 245，咖啡 90",
+    input: "午餐 120，Uber 245，雜支 90",
     segments: 3,
     outcomes: ["draft", "draft", "missing_fields"],
-    // 「咖啡」無從判斷用途，但金額已知：留下「待分類」後援殼，才追問得起來。
+    // 「雜支」無從判斷分類，但金額已知：留下「待分類」後援殼，才追問得起來。
     allocationCounts: [1, 1, 1],
   },
   {
@@ -77,7 +83,7 @@ export const parserCorpus: readonly CorpusCase[] = [
   {
     input: "國泰卡刷 1200，午餐 120",
     segments: 2,
-    outcomes: ["draft", "draft"],
+    outcomes: ["missing_fields", "draft"],
     allocationCounts: [1, 1],
   },
   {
@@ -100,7 +106,7 @@ export const parserCorpus: readonly CorpusCase[] = [
 
   // 追問路徑
   { input: "午餐", segments: 1, outcomes: ["missing_fields"], allocationCounts: [1] },
-  { input: "咖啡 60", segments: 1, outcomes: ["missing_fields"], allocationCounts: [1] },
+  { input: "雜支 60", segments: 1, outcomes: ["missing_fields"], allocationCounts: [1] },
   // 轉帳與退款的追問還湊不出配置殼，配置為空是既有行為。
   { input: "台新轉國泰", segments: 1, outcomes: ["missing_fields"], allocationCounts: [0] },
   { input: "退款 300", segments: 1, outcomes: ["missing_fields"], allocationCounts: [0] },
@@ -130,10 +136,11 @@ export const parserCorpus: readonly CorpusCase[] = [
     outcomes: ["missing_fields"],
     allocationCounts: [2],
   },
+  // 「聚餐」不在關鍵字表裡，帶不帶卡都一樣要追問分類——與上面沒帶卡的同句一致。
   {
     input: "聚餐 1260 國泰卡，朋友欠一半",
     segments: 1,
-    outcomes: ["draft"],
+    outcomes: ["missing_fields"],
     allocationCounts: [2],
   },
   // 三人平分：1 筆個人 + 2 筆代墊 placeholder。
@@ -199,7 +206,7 @@ const counterparties: Counterparty[] = [
 ];
 
 const categories: Category[] = [
-  ["expense_dining_lunch", "午餐"],
+  ["expense_dining", "午餐"],
   ["expense_transport", "交通"],
   ["expense_financial_fee", "金融費用"],
   ["income_salary", "薪資"],

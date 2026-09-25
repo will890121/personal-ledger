@@ -10,7 +10,7 @@ describe("advance statistics", () => {
         purpose: "expense",
         amount: "630",
         categoryId: "c1",
-        categoryKey: "expense_dining_lunch",
+        categoryKey: "expense_dining",
         categoryName: "餐飲",
       },
       {
@@ -18,7 +18,7 @@ describe("advance statistics", () => {
         purpose: "advance",
         amount: "630",
         categoryId: "c1",
-        categoryKey: "expense_dining_lunch",
+        categoryKey: "expense_dining",
         categoryName: "餐飲",
       },
     ]);
@@ -35,7 +35,7 @@ describe("advance statistics", () => {
         purpose: "advance_recovery",
         amount: "300",
         categoryId: "c1",
-        categoryKey: "expense_dining_lunch",
+        categoryKey: "expense_dining",
         categoryName: "餐飲",
       },
     ]);

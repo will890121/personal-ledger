@@ -15,7 +15,7 @@ const context = {
     {
       categoryId: "category-dining",
       ownerId: "123",
-      key: "expense_dining_lunch",
+      key: "expense_dining",
       name: "午餐",
       kind: "expense" as const,
       parentId: "category-expense",

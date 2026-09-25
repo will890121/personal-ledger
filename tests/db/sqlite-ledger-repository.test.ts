@@ -5,6 +5,7 @@ import { openDatabase } from "../../src/db/database.js";
 import { migrate } from "../../src/db/migrate.js";
 import { SqliteLedgerRepository } from "../../src/db/sqlite-ledger-repository.js";
 import type { TransactionDraft } from "../../src/domain/ledger.js";
+import { seedM1Ledger } from "../fixtures/m1-ledger.js";
 
 const draft: TransactionDraft = {
   draftId: "draft-1",
@@ -382,5 +383,59 @@ describe("SqliteLedgerRepository", () => {
     const transaction = await advanceRepository.getTransaction("owner-1", recoveryTransactionId);
 
     expect(transaction?.allocations[0]?.recoversAllocationId).toBe("advance-allocation");
+  });
+  it("reuses the migrated 餐飲 category for an allocation that carries no categoryId", async () => {
+    // 必須用「由 M1 升級上來」的資料庫，這才是 id 會分岔的場景：migration 0002 建的
+    // category_id 是 'm2:<owner>:expense_dining_lunch'，0006 只改 key／name，而全新安裝
+    // 由 bootstrap 種的是 'm2:<owner>:expense_dining'。ensureLegacyCategory 若直接組 id
+    // 再 INSERT OR IGNORE，在升級過的帳本上會被 UNIQUE (owner_id, key) 靜靜吃掉並回傳
+    // 一個不存在的 id，緊接著的 allocation 寫入就踩外鍵。
+    // （全新安裝兩邊組出來的 id 相同，測不出這個分岔。）
+    const upgraded = openDatabase(":memory:");
+    try {
+      seedM1Ledger(upgraded);
+      migrate(upgraded);
+      const upgradedRepository = new SqliteLedgerRepository(upgraded);
+      const migrated = upgraded
+        .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
+        .get("owner-1", "expense_dining") as { category_id: string };
+      expect(migrated.category_id).toBe("m2:owner-1:expense_dining_lunch");
+
+      await upgradedRepository.recordInputEvent({
+        eventId: "upgrade-event",
+        ownerId: "owner-1",
+        telegramUpdateId: "upgrade-update",
+        sourceType: "telegram",
+        sourceRef: "upgrade-message",
+        rawText: "午餐 120",
+        receivedAt: "2026-09-26T01:00:00.000Z",
+      });
+      await upgradedRepository.saveDraft({
+        ...draft,
+        draftId: "upgrade-draft",
+        ownerId: "owner-1",
+        requestId: "upgrade-request",
+        sourceEventId: "upgrade-event",
+      });
+      const confirmed = await upgradedRepository.confirmDraft(
+        "upgrade-draft",
+        "2026-09-26T01:01:00.000Z",
+        "upgrade-audit",
+      );
+
+      expect(
+        upgraded
+          .prepare("SELECT category_id FROM allocations WHERE transaction_id = ?")
+          .get(confirmed.transactionId),
+      ).toEqual({ category_id: migrated.category_id });
+      expect(
+        upgraded
+          .prepare("SELECT count(*) AS total FROM categories WHERE owner_id = ? AND key = ?")
+          .get("owner-1", "expense_dining"),
+      ).toEqual({ total: 1 });
+      expect(upgraded.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      upgraded.close();
+    }
   });
 });

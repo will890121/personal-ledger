@@ -11,17 +11,17 @@ const context = {
   today: "2026-09-18",
 };
 
-// 生產環境經 bootstrapReferenceData 種進去的午餐葉分類，名稱本身就叫「午餐」；
-// 測試替身以前一律取名「餐飲」，於是「分類名稱與 subcategory 重複」在測試裡永遠
-// 看不見，只有真實資料庫會渲染成「午餐／午餐」。這份 context 照著生產資料命名。
+// 照著 bootstrapReferenceData 種出來的樣子命名：第二層是「餐飲」，餐別由
+// allocations.subcategory 承載。測試替身與生產各寫一份名稱，正是「午餐／午餐」
+// 這種重複一路躲過測試的原因，這份 context 因此必須與 category-catalog 一致。
 const bootstrappedContext = {
   ...context,
   categories: [
     {
-      categoryId: "category-lunch",
+      categoryId: "category-dining",
       ownerId: "123",
-      key: "expense_dining_lunch",
-      name: "午餐",
+      key: "expense_dining",
+      name: "餐飲",
       kind: "expense" as const,
       parentId: "category-expense",
       depth: 2 as const,
@@ -47,7 +47,8 @@ describe("parseTransaction", () => {
             fundsEffect: "outflow",
             purpose: "expense",
             amount: { amount: "120", currency: "TWD" },
-            category: "午餐",
+            category: "餐飲",
+            subcategory: "午餐",
           },
         ],
         rawInputSnapshot: "午餐 120",
@@ -68,7 +69,8 @@ describe("parseTransaction", () => {
             allocationId: "allocation-1",
             fundsEffect: "outflow",
             purpose: "expense",
-            category: "午餐",
+            category: "餐飲",
+            subcategory: "午餐",
           },
         ],
       },
@@ -94,7 +96,8 @@ describe("parseTransaction", () => {
     expect(result.partial.allocations[0]).toMatchObject({
       fundsEffect: "outflow",
       purpose: "expense",
-      category: "午餐",
+      category: "餐飲",
+      subcategory: "午餐",
     });
     expect(result.partial.allocations[0]?.amount).toBeUndefined();
   });
@@ -108,7 +111,7 @@ describe("parseTransaction", () => {
   });
 
   it("returns an allocation shell without a category when the category is unknown", () => {
-    const result = parseTransaction("咖啡 60", context);
+    const result = parseTransaction("雜支 60", context);
 
     expect(result.kind).toBe("missing_fields");
     if (result.kind !== "missing_fields") return;
@@ -121,7 +124,7 @@ describe("parseTransaction", () => {
     expect(result.partial.allocations[0]?.categoryId).toBeUndefined();
   });
 
-  it("does not repeat the resolved lunch category name as a subcategory", () => {
+  it("puts the meal in the subcategory and never repeats the category name", () => {
     const result = parseTransaction("午餐 120", bootstrappedContext);
 
     expect(result.kind).toBe("draft");
@@ -131,9 +134,53 @@ describe("parseTransaction", () => {
       fundsEffect: "outflow",
       purpose: "expense",
       amount: { amount: "120", currency: "TWD" },
-      categoryId: "category-lunch",
-      category: "午餐",
+      categoryId: "category-dining",
+      category: "餐飲",
+      subcategory: "午餐",
     });
+  });
+
+  it("maps each meal keyword to its own subcategory under 餐飲", () => {
+    for (const [text, subcategory] of [
+      ["早餐 100", "早餐"],
+      ["晚餐 150", "晚餐"],
+      ["宵夜 80", "宵夜"],
+    ]) {
+      const result = parseTransaction(String(text), bootstrappedContext);
+
+      expect(result.kind).toBe("draft");
+      if (result.kind !== "draft") continue;
+      expect(result.draft.allocations[0]).toMatchObject({
+        categoryId: "category-dining",
+        category: "餐飲",
+        subcategory,
+      });
+    }
+  });
+
+  it("does not let a mentioned account imply a category", () => {
+    // M2 的行為是「沒有關鍵字但有帳戶就預設午餐」，於是「早餐 100 現金」被靜靜記成
+    // 午餐、連追問都沒有。帳戶只決定 fundsEffect，不得決定分類。
+    const withAccount = {
+      ...bootstrappedContext,
+      accounts: [
+        {
+          accountId: "account-cash",
+          ownerId: "123",
+          name: "現金",
+          type: "cash" as const,
+          currency: "TWD" as const,
+          active: true,
+        },
+      ],
+    };
+
+    const result = parseTransaction("雜支 100 現金", withAccount);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category"]);
+    expect(result.partial.allocations[0]?.categoryId).toBeUndefined();
   });
 
   it("names the lunch category the same way with or without seeded reference data", () => {

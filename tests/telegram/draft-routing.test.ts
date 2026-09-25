@@ -15,8 +15,8 @@ function seedCategories(referenceRepository: FakeReferenceRepository): void {
   referenceRepository.categories.push({
     categoryId: "category-lunch",
     ownerId: "123",
-    key: "expense_dining_lunch",
-    name: "午餐",
+    key: "expense_dining",
+    name: "餐飲",
     kind: "expense",
     parentId: "category-expense",
     depth: 2,
@@ -81,7 +81,7 @@ describe("draft routing", () => {
 
   it("applies a candidate button answer to the referenced draft", async () => {
     const { bot, calls, repository } = harness();
-    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "咖啡 60" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "雜支 60" }));
     const draftRef = firstDraftRef(repository);
 
     await bot.handleUpdate(callbackUpdate({ updateId: 2, data: `a:${draftRef}:cat:0` }));
@@ -95,7 +95,7 @@ describe("draft routing", () => {
 
   it("replaces the prompt in place when answered with a candidate button", async () => {
     const { bot, calls, repository } = harness();
-    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "咖啡 60" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "雜支 60" }));
     const draftRef = firstDraftRef(repository);
     const before = calls.filter((call) => call.method === "sendMessage").length;
 
@@ -129,7 +129,7 @@ describe("draft routing", () => {
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
 
     const text = getText(calls.at(-1));
-    expect(text).toContain("　　午餐 · TWD 120");
+    expect(text).toContain("　　餐飲／午餐 · TWD 120");
     expect(text).not.toContain("午餐／午餐");
   });
 });

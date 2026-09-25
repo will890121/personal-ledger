@@ -818,14 +818,24 @@ export class SqliteLedgerRepository implements LedgerRepository {
         "INSERT OR IGNORE INTO categories (category_id, owner_id, key, name, kind, depth) VALUES (?, ?, 'expense', '支出', 'expense', 1)",
       )
       .run(rootId, ownerId);
-    const lunch =
+    const dining =
       ["food", "餐飲"].includes(category) &&
       subcategory !== undefined &&
       ["meal", "午餐"].includes(subcategory);
     const suffix = Buffer.from(`${category}\u0000${subcategory ?? ""}`)
       .toString("hex")
       .toLowerCase();
-    const id = lunch ? `m2:${ownerId}:expense_dining_lunch` : `legacy:${ownerId}:${suffix}`;
+    const key = dining ? "expense_dining" : `legacy_${suffix}`;
+    // 必須先按 key 查：categories 有 UNIQUE (owner_id, key)，而同一個餐飲分類在不同
+    // 安裝裡的 category_id 並不相同——由 M1 升級上來的帳本留著舊 id
+    // 'm2:<owner>:expense_dining_lunch'（見 0006 的說明），全新安裝則是 bootstrap 種的
+    // 'm2:<owner>:expense_dining'。直接組 id 再 INSERT OR IGNORE 會被 UNIQUE 靜靜吃掉，
+    // 然後回傳一個不存在的 id，緊接著的 allocation 寫入就會踩到外鍵。
+    const existing = this.database
+      .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
+      .get(ownerId, key) as { category_id: string } | undefined;
+    if (existing) return existing.category_id;
+    const id = dining ? `m2:${ownerId}:expense_dining` : `legacy:${ownerId}:${suffix}`;
     this.database
       .prepare(
         "INSERT OR IGNORE INTO categories (category_id, owner_id, key, name, kind, parent_id, depth) VALUES (?, ?, ?, ?, 'expense', ?, 2)",
@@ -833,8 +843,8 @@ export class SqliteLedgerRepository implements LedgerRepository {
       .run(
         id,
         ownerId,
-        lunch ? "expense_dining_lunch" : `legacy_${suffix}`,
-        subcategory ? `${category}／${subcategory}` : category,
+        key,
+        dining ? "餐飲" : subcategory ? `${category}／${subcategory}` : category,
         rootId,
       );
     return id;

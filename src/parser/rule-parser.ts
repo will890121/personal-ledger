@@ -7,6 +7,8 @@ import { Decimal } from "decimal.js";
 import type { ParseField, PartialAllocation, PartialDraft } from "../domain/draft.js";
 import { money, type Money } from "../domain/money.js";
 import type { Account, Category, Counterparty, Merchant } from "../domain/reference-data.js";
+import { categoryName } from "../domain/category-catalog.js";
+import { matchCategoryKeyword, matchMerchantCategory } from "./category-keywords.js";
 import { parseShare } from "./split-share.js";
 
 export type { ParseField };
@@ -113,6 +115,15 @@ function draft(
   };
 }
 
+/**
+ * 支出配置殼。分類一律由對照表決定：商家優先（商家是比關鍵字更強的訊號），其次是
+ * 句子裡的關鍵字，兩者都對不上就回空陣列，交給 fallbackExpenseShell 的「待分類」殼去
+ * 追問。
+ *
+ * 這裡刻意**不看帳戶**。M2 的版本是「沒有關鍵字但有帳戶就預設午餐」，於是
+ * 「早餐 100 現金」「國泰卡刷 1200」都被靜靜記成午餐，而且欄位齊全、連追問都沒有，
+ * 直接送上預覽等使用者按確認——猜錯又不告知，比追問一次糟得多。
+ */
 function expenseShell(
   context: ParseContext,
   text: string,
@@ -120,23 +131,19 @@ function expenseShell(
   merchant: Merchant | undefined,
   amount?: Money,
 ): PartialAllocation[] {
-  const isLunch = text.includes("午餐");
-  // 與正式草稿路徑相同的判斷：沒有任何參照也不是午餐時，無從決定用途。
-  if (!isLunch && !merchant && !account) return [];
-  const knownMerchant = merchant?.name === "Uber";
-  const categoryKey = knownMerchant ? "expense_transport" : "expense_dining_lunch";
-  // fallback 必須與 bootstrapReferenceData 種進去的葉分類同名，否則「有參考資料」與
-  // 「沒有參考資料」兩條路徑會顯示成不同的分類名稱，測試也就蓋不到生產行為。
-  const categoryFallback = knownMerchant ? "交通" : "午餐";
-  // M1 用 category + subcategory 兩個自由字串表達「餐飲／午餐」；M2 改成兩層分類後
-  // 「午餐」本身就是葉節點，再補一個同名 subcategory 只會讓預覽印出「午餐／午餐」。
+  const match =
+    (merchant ? matchMerchantCategory(merchant.name) : undefined) ?? matchCategoryKeyword(text);
+  if (!match) return [];
   return [
     {
       allocationId: context.allocationId,
       fundsEffect: account?.type === "credit_card" ? "none" : "outflow",
       purpose: "expense",
       ...(amount ? { amount } : {}),
-      ...category(context, categoryKey, categoryFallback),
+      // 後援名稱取自 category-catalog，與 bootstrap 種的名稱同一份定義；兩邊各寫一份
+      // 正是「午餐／午餐」躲過所有測試的原因。
+      ...category(context, match.categoryKey, categoryName(match.categoryKey) ?? match.categoryKey),
+      ...(match.subcategory ? { subcategory: match.subcategory } : {}),
     },
   ];
 }

@@ -23,7 +23,7 @@ function seedReferences(referenceRepository: FakeReferenceRepository): void {
   referenceRepository.categories.push({
     categoryId: "category-lunch",
     ownerId: OWNER_ID,
-    key: "expense_dining_lunch",
+    key: "expense_dining",
     name: "午餐",
     kind: "expense",
     parentId: "category-expense",

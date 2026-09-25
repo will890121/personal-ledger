@@ -174,7 +174,16 @@ export class SqliteReferenceRepository implements ReferenceRepository {
 
   public saveCategory(category: Category): Promise<void> {
     const parsed = CategorySchema.parse(category);
-    this.assertIdOwner("categories", "category_id", parsed.categoryId, parsed.ownerId);
+    // key 才是分類在一個帳本裡的邏輯身分（categories 有 UNIQUE (owner_id, key)），
+    // category_id 只是不透明識別碼，而且同一個分類在不同安裝裡的 id 並不相同：由 M1
+    // 升級上來的帳本留著 migration 建的舊 id，全新安裝則是 bootstrap 自己組的。
+    // 只看 category_id 判斷衝突的話，bootstrap 在升級過的帳本上會撞 UNIQUE 而讓整個
+    // 啟動失敗。既有的 key 一律沿用它自己的 id。
+    const existing = this.database
+      .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
+      .get(parsed.ownerId, parsed.key) as { category_id: string } | undefined;
+    const categoryId = existing?.category_id ?? parsed.categoryId;
+    this.assertIdOwner("categories", "category_id", categoryId, parsed.ownerId);
     this.database
       .prepare(
         `INSERT INTO categories (
@@ -191,7 +200,7 @@ export class SqliteReferenceRepository implements ReferenceRepository {
         WHERE categories.owner_id = excluded.owner_id`,
       )
       .run(
-        parsed.categoryId,
+        categoryId,
         parsed.ownerId,
         parsed.key,
         parsed.name,
