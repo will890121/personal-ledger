@@ -25,6 +25,13 @@ export interface RecordRecoveryDependencies {
   readonly incomeCategoryIds: readonly string[];
 }
 
+// 超額回收沖抵了哪幾筆代墊、各沖抵多少：追問分類時要把這份摘要交給 Telegram 層，
+// 讓它能組出「其中 630 沖抵 2026-09-25 的代墊」這類有脈絡的文案，而不必額外查表。
+export interface RecoveredAdvanceSummary {
+  readonly occurredDate: string;
+  readonly amount: string;
+}
+
 export type RecordRecoveryResult =
   | { readonly kind: "draft"; readonly draft: TransactionDraft; readonly draftRef: string }
   | {
@@ -32,6 +39,7 @@ export type RecordRecoveryResult =
       readonly draft: IncompleteDraft;
       readonly draftRef: string;
       readonly surplus: string;
+      readonly recovered: readonly RecoveredAdvanceSummary[];
     }
   | { readonly kind: "no_outstanding" }
   | { readonly kind: "duplicate" };
@@ -127,7 +135,11 @@ export async function recordRecovery(
       batchIndex: 0,
       createdDate: command.occurredDate,
     });
-    return { kind: "incomplete", draft, draftRef, surplus: plan.surplus };
+    const recovered = plan.items.map((item) => ({
+      occurredDate: item.advance.occurredDate,
+      amount: item.amount,
+    }));
+    return { kind: "incomplete", draft, draftRef, surplus: plan.surplus, recovered };
   }
 
   const total = allocations.reduce((sum, item) => sum.plus(item.amount.amount), new Decimal(0));

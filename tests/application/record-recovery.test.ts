@@ -135,6 +135,20 @@ describe("recordRecovery", () => {
     ]);
   });
 
+  it("reports which advances the surplus payment offset", async () => {
+    const { dependencies } = setupTwoAdvances();
+
+    const result = await recordRecovery({ ...baseCommand, received: "350" }, dependencies);
+
+    expect(result.kind).toBe("incomplete");
+    if (result.kind !== "incomplete") return;
+    expect(result.surplus).toBe("50");
+    expect(result.recovered).toEqual([
+      { occurredDate: "2026-09-10", amount: "100" },
+      { occurredDate: "2026-09-15", amount: "200" },
+    ]);
+  });
+
   it("reports when the counterparty has nothing outstanding", async () => {
     const { dependencies } = setupNoAdvances();
 

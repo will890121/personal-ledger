@@ -12,7 +12,7 @@ import { decodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
 import { formatAdvances, type AdvanceRefs } from "../format-advance.js";
 import { formatPreview } from "../format-preview.js";
-import { formatPrompt } from "../format-prompt.js";
+import { formatRecoverySurplusPrompt } from "../format-recovery-prompt.js";
 
 const ADVANCES_MESSAGE_KEY = "advances_list_message";
 // 待回收狀態：綁定「發問訊息」的 chatId:messageId，只有回覆到那則訊息的純數字
@@ -252,7 +252,7 @@ export async function deliverRecoveryResult(
   );
   const view =
     result.kind === "incomplete"
-      ? formatPrompt(result.draft, result.draftRef, references)
+      ? formatRecoverySurplusPrompt(result, references)
       : formatPreview(result.draft, references);
   const sent = await context.reply(view.text, {
     ...(view.replyMarkup ? { reply_markup: view.replyMarkup } : {}),

@@ -211,6 +211,23 @@ describe("/advances", () => {
     expect(text).toContain("總金額：TWD 300");
   });
 
+  it("explains the surplus context when a recovery overpays the outstanding total", async () => {
+    // 630 的未回收代墊（400 + 230，日期分別是 09-10、09-11），還 700 會多出 70。
+    // 使用者只看到「待補分類」完全不知道 630 已經沖抵了哪幾筆、剩下的 70 才是
+    // 要分類的對象，因此追問文案必須把沖抵金額、被沖抵代墊的日期、剩餘待分類
+    // 金額都寫清楚，而不能只複誦輸入原文。
+    const { bot, calls } = harnessWithAdvances();
+
+    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "小明還 700" }));
+
+    const text = getText(calls.at(-1));
+    expect(text).toContain("630");
+    expect(text).toContain("70");
+    expect(text).toContain("2026-09-10");
+    expect(text).toContain("2026-09-11");
+    expect(text).not.toContain("待補分類：小明還 700");
+  });
+
   it("confirms before abandoning and reports the amount", async () => {
     const { bot, calls, allocationRef } = harnessWithAdvances();
     await bot.handleUpdate(messageUpdate({ updateId: 10, text: "/advances" }));
