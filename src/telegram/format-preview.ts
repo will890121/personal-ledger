@@ -36,7 +36,10 @@ export function formatPreview(
   } = {},
 ): DraftPreview {
   if (draft.allocations.length === 0) throw new Error("draft must contain an allocation");
-  const allocationLines = draft.allocations.flatMap((allocation, index) => {
+  // 樹狀縮排版型（版型 D，見 docs/design/preview-layouts.md）：每筆配置佔兩行，
+  // 第一行「▸ 資金效果 · 用途 (交易對象)」，第二行縮排列出分類與金額，
+  // 讓多筆配置（例如多人分帳）在視覺上彼此分開，不會擠成一團難以辨讀。
+  const allocationLines = draft.allocations.flatMap((allocation) => {
     const category = allocation.subcategory
       ? `${allocation.category}／${allocation.subcategory}`
       : allocation.category;
@@ -48,9 +51,8 @@ export function formatPreview(
         )?.name ?? allocation.counterpartyId)
       : undefined;
     return [
-      `配置 ${String(index + 1)}：${purposeLabels[allocation.purpose]} · ${effectLabels[allocation.fundsEffect]}`,
-      `分類：${category} · ${allocation.amount.currency} ${allocation.amount.amount}`,
-      ...(counterpartyName ? [`交易對象：${counterpartyName}`] : []),
+      `▸ ${effectLabels[allocation.fundsEffect]} · ${purposeLabels[allocation.purpose]}${counterpartyName ? ` (${counterpartyName})` : ""}`,
+      `\u3000\u3000${category} · ${allocation.amount.currency} ${allocation.amount.amount}`,
     ];
   });
   const accountFrom = references.accounts?.find((item) => item.accountId === draft.accountFromId);
@@ -72,6 +74,7 @@ export function formatPreview(
       `日期：${draft.occurredDate}`,
       `總金額：${draft.amount.currency} ${draft.amount.amount}`,
       ...referenceLines,
+      "",
       ...allocationLines,
     ].join("\n"),
     replyMarkup: {
