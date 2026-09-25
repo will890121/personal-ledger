@@ -125,7 +125,11 @@ function expenseShell(
   if (!isLunch && !merchant && !account) return [];
   const knownMerchant = merchant?.name === "Uber";
   const categoryKey = knownMerchant ? "expense_transport" : "expense_dining_lunch";
-  const categoryFallback = knownMerchant ? "交通" : "餐飲";
+  // fallback 必須與 bootstrapReferenceData 種進去的葉分類同名，否則「有參考資料」與
+  // 「沒有參考資料」兩條路徑會顯示成不同的分類名稱，測試也就蓋不到生產行為。
+  const categoryFallback = knownMerchant ? "交通" : "午餐";
+  // M1 用 category + subcategory 兩個自由字串表達「餐飲／午餐」；M2 改成兩層分類後
+  // 「午餐」本身就是葉節點，再補一個同名 subcategory 只會讓預覽印出「午餐／午餐」。
   return [
     {
       allocationId: context.allocationId,
@@ -133,7 +137,6 @@ function expenseShell(
       purpose: "expense",
       ...(amount ? { amount } : {}),
       ...category(context, categoryKey, categoryFallback),
-      ...(isLunch ? { subcategory: "午餐" } : {}),
     },
   ];
 }

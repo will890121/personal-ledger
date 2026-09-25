@@ -16,7 +16,7 @@ function seedCategories(referenceRepository: FakeReferenceRepository): void {
     categoryId: "category-lunch",
     ownerId: "123",
     key: "expense_dining_lunch",
-    name: "餐飲",
+    name: "午餐",
     kind: "expense",
     parentId: "category-expense",
     depth: 2,
@@ -119,5 +119,17 @@ describe("draft routing", () => {
     expect(getText(calls.at(-1))).toContain("金額格式");
     const record = await repository.getDraftRecord({ draftId: "id-3" });
     expect(record?.status).toBe("awaiting_input");
+  });
+  // 這個 bug 活在 parser 與版型之間的接縫上：parser 取葉分類名稱（「午餐」）當
+  // category，又硬補一個同名 subcategory，預覽便印出「午餐／午餐」。單看 parser 或
+  // 單看 formatPreview 都不會發現，只有走完整條鏈的斷言擋得住它回來。
+  it("renders the lunch category once in the preview", async () => {
+    const { bot, calls } = harness();
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
+
+    const text = getText(calls.at(-1));
+    expect(text).toContain("　　午餐 · TWD 120");
+    expect(text).not.toContain("午餐／午餐");
   });
 });

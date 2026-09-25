@@ -11,6 +11,25 @@ const context = {
   today: "2026-09-18",
 };
 
+// 生產環境經 bootstrapReferenceData 種進去的午餐葉分類，名稱本身就叫「午餐」；
+// 測試替身以前一律取名「餐飲」，於是「分類名稱與 subcategory 重複」在測試裡永遠
+// 看不見，只有真實資料庫會渲染成「午餐／午餐」。這份 context 照著生產資料命名。
+const bootstrappedContext = {
+  ...context,
+  categories: [
+    {
+      categoryId: "category-lunch",
+      ownerId: "123",
+      key: "expense_dining_lunch",
+      name: "午餐",
+      kind: "expense" as const,
+      parentId: "category-expense",
+      depth: 2 as const,
+      active: true,
+    },
+  ],
+};
+
 describe("parseTransaction", () => {
   it("parses the first deterministic lunch expense", () => {
     expect(parseTransaction("午餐 120", context)).toEqual({
@@ -28,8 +47,7 @@ describe("parseTransaction", () => {
             fundsEffect: "outflow",
             purpose: "expense",
             amount: { amount: "120", currency: "TWD" },
-            category: "餐飲",
-            subcategory: "午餐",
+            category: "午餐",
           },
         ],
         rawInputSnapshot: "午餐 120",
@@ -50,8 +68,7 @@ describe("parseTransaction", () => {
             allocationId: "allocation-1",
             fundsEffect: "outflow",
             purpose: "expense",
-            category: "餐飲",
-            subcategory: "午餐",
+            category: "午餐",
           },
         ],
       },
@@ -77,8 +94,7 @@ describe("parseTransaction", () => {
     expect(result.partial.allocations[0]).toMatchObject({
       fundsEffect: "outflow",
       purpose: "expense",
-      category: "餐飲",
-      subcategory: "午餐",
+      category: "午餐",
     });
     expect(result.partial.allocations[0]?.amount).toBeUndefined();
   });
@@ -103,5 +119,30 @@ describe("parseTransaction", () => {
       amount: { amount: "60", currency: "TWD" },
     });
     expect(result.partial.allocations[0]?.categoryId).toBeUndefined();
+  });
+
+  it("does not repeat the resolved lunch category name as a subcategory", () => {
+    const result = parseTransaction("午餐 120", bootstrappedContext);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.allocations[0]).toEqual({
+      allocationId: "allocation-1",
+      fundsEffect: "outflow",
+      purpose: "expense",
+      amount: { amount: "120", currency: "TWD" },
+      categoryId: "category-lunch",
+      category: "午餐",
+    });
+  });
+
+  it("names the lunch category the same way with or without seeded reference data", () => {
+    const seeded = parseTransaction("午餐 120", bootstrappedContext);
+    const unseeded = parseTransaction("午餐 120", context);
+
+    expect(seeded.kind).toBe("draft");
+    expect(unseeded.kind).toBe("draft");
+    if (seeded.kind !== "draft" || unseeded.kind !== "draft") return;
+    expect(unseeded.draft.allocations[0]?.category).toBe(seeded.draft.allocations[0]?.category);
   });
 });

@@ -24,7 +24,7 @@ function seedReferences(referenceRepository: FakeReferenceRepository): void {
     categoryId: "category-lunch",
     ownerId: OWNER_ID,
     key: "expense_dining_lunch",
-    name: "餐飲",
+    name: "午餐",
     kind: "expense",
     parentId: "category-expense",
     depth: 2,
