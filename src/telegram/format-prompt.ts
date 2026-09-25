@@ -23,6 +23,20 @@ export interface DraftPrompt {
   readonly replyMarkup?: InlineKeyboardMarkup;
 }
 
+// 多人分帳可能有好幾筆代墊都缺交易對象，逐人追問時每一輪的候選清單與文案
+// 往往完全相同——Telegram 認為訊息沒有變化會拒絕 editMessageText，使用者
+// 因此看起來「按了沒反應」。從草稿的代墊配置推導「第幾位、共幾位」，讓每一輪
+// 追問的文字不同，藉此避免整輪訊息與上一輪逐字相同。只有多筆代墊待指定時
+// 才顯示進度，單筆分帳沒有這個問題，維持原本簡潔的文案。
+function counterpartyProgress(
+  partial: IncompleteDraft["partial"],
+): { readonly current: number; readonly total: number } | undefined {
+  const advances = partial.allocations.filter((item) => item.purpose === "advance");
+  if (advances.length <= 1) return undefined;
+  const filled = advances.filter((item) => item.counterpartyId).length;
+  return { current: filled + 1, total: advances.length };
+}
+
 export function formatPrompt(
   draft: IncompleteDraft,
   draftRef: string,
@@ -53,8 +67,15 @@ export function formatPrompt(
   }
 
   if (pending.proposedName) {
+    const progress = counterpartyProgress(draft.partial);
+    const lines = [
+      ...(progress
+        ? [`待補交易對象（第 ${String(progress.current)} 位，共 ${String(progress.total)} 位）`]
+        : []),
+      `尚未建立「${pending.proposedName}」這個交易對象，要建立嗎？`,
+    ];
     return {
-      text: `尚未建立「${pending.proposedName}」這個交易對象，要建立嗎？`,
+      text: lines.join("\n"),
       replyMarkup: {
         inline_keyboard: [
           [
@@ -89,7 +110,12 @@ export function formatPrompt(
   // §5.4：counterparty 的追問必須同時提供既有對象的按鈕與「回覆本訊息輸入新名稱」
   // 兩條路。尚未建立任何交易對象的帳本候選清單必定是空的，少了這句指示，使用者
   // 看到的是一則沒有任何出路的訊息。
-  const lines = [`待補${fieldLabels[pending.field]}：${segment}`];
+  const progress =
+    pending.field === "counterparty" ? counterpartyProgress(draft.partial) : undefined;
+  const progressSuffix = progress
+    ? `（第 ${String(progress.current)} 位，共 ${String(progress.total)} 位）`
+    : "";
+  const lines = [`待補${fieldLabels[pending.field]}${progressSuffix}：${segment}`];
   if (pending.field === "counterparty") {
     lines.push(
       buttons.length > 0

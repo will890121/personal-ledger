@@ -1,6 +1,6 @@
 import type { InlineKeyboardMarkup } from "grammy/types";
 import type { ConfirmedTransaction, TransactionDraft } from "../domain/ledger.js";
-import type { Account, Merchant } from "../domain/reference-data.js";
+import type { Account, Counterparty, Merchant } from "../domain/reference-data.js";
 
 const effectLabels: Record<TransactionDraft["allocations"][number]["fundsEffect"], string> = {
   inflow: "資金流入",
@@ -31,6 +31,7 @@ export function formatPreview(
   references: {
     readonly accounts?: readonly Account[];
     readonly merchants?: readonly Merchant[];
+    readonly counterparties?: readonly Counterparty[];
     readonly refundTarget?: ConfirmedTransaction;
   } = {},
 ): DraftPreview {
@@ -39,9 +40,17 @@ export function formatPreview(
     const category = allocation.subcategory
       ? `${allocation.category}／${allocation.subcategory}`
       : allocation.category;
+    // 代墊與代墊收回都掛著各自的交易對象；多人分帳時若不逐筆顯示，
+    // 使用者在確認前完全看不出哪一筆是指派給誰，選錯也不會發現。
+    const counterpartyName = allocation.counterpartyId
+      ? (references.counterparties?.find(
+          (item) => item.counterpartyId === allocation.counterpartyId,
+        )?.name ?? allocation.counterpartyId)
+      : undefined;
     return [
       `配置 ${String(index + 1)}：${purposeLabels[allocation.purpose]} · ${effectLabels[allocation.fundsEffect]}`,
       `分類：${category} · ${allocation.amount.currency} ${allocation.amount.amount}`,
+      ...(counterpartyName ? [`交易對象：${counterpartyName}`] : []),
     ];
   });
   const accountFrom = references.accounts?.find((item) => item.accountId === draft.accountFromId);
