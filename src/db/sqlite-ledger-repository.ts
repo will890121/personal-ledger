@@ -457,6 +457,12 @@ export class SqliteLedgerRepository implements LedgerRepository {
 
   public updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
+      // 配置採「先全刪再重建」的方式更新，但 allocations.recovers_allocation_id 是指向
+      // allocations 自身的外鍵（migration 0005），回收配置會指著被刪除的代墊配置。
+      // defer_foreign_keys 可以在交易內設定（與 foreign_keys 不同），把外鍵檢查延到 COMMIT
+      // 才做，讓「刪除後立即以相同 allocation_id 重建」成立，最終狀態的完整性仍然被檢查。
+      // 這個 pragma 會在每次 COMMIT／ROLLBACK 後自動重設，不會外溢到其他操作。
+      this.database.pragma("defer_foreign_keys = ON");
       const before = this.requireMutable(command.ownerId, command.transactionId);
       if (before.updatedAt !== command.expectedUpdatedAt)
         throw new Error("stale transaction update");
