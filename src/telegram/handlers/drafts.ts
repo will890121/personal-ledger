@@ -16,7 +16,12 @@ import { parseRepayment } from "../../parser/split-share.js";
 import { decodeCallback, encodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
 import { formatPreview } from "../format-preview.js";
-import { formatBatchSummary, formatKeywordOffer, formatPrompt } from "../format-prompt.js";
+import {
+  formatBatchSummary,
+  formatKeywordOffer,
+  formatKeywordList,
+  formatPrompt,
+} from "../format-prompt.js";
 import { deliverRecoveryResult, handleRecoveryReply, loadIncomeCategoryIds } from "./advances.js";
 
 const AMOUNT_ONLY = /^\d+(?:\.\d+)?$/;
@@ -268,6 +273,58 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     );
   });
 
+  /**
+   * 教過的詞清單。這是「教錯了」唯一的出路：教過的詞會先於任何追問被命中，所以那個詞
+   * 再也不會跳出「要記住嗎」，沒有這份清單，一次誤觸就會讓之後每一筆含該詞的交易被
+   * 歸錯分類。刪除鍵帶的是清單索引而不是關鍵字本身——關鍵字是中文，不能放進
+   * callback_data。
+   */
+  async function replyKeywordList(context: Context): Promise<void> {
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const items = references.userKeywords.map((item) => ({
+      keyword: item.keyword,
+      categoryName:
+        references.categories.find((category) => category.categoryId === item.categoryId)?.name ??
+        "（分類已不存在）",
+    }));
+    const message = formatKeywordList(items);
+    await context.reply(message.text, {
+      ...(message.replyMarkup ? { reply_markup: message.replyMarkup } : {}),
+    });
+  }
+
+  bot.command("keywords", async (context) => {
+    await replyKeywordList(context);
+  });
+
+  bot.callbackQuery(/^kd:/, async (context) => {
+    const action = decodeCallback(context.callbackQuery.data);
+    if (action?.kind !== "delete-keyword") {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+    // 索引對應的是「按下按鈕當時」那份清單；期間若有變動就重新列一次，
+    // 不能照著舊索引刪掉別的詞。
+    const keywords = await dependencies.referenceRepository.listUserCategoryKeywords(
+      dependencies.ownerId,
+    );
+    const target = keywords[action.index];
+    if (!target) {
+      await context.answerCallbackQuery({ text: "這個詞已經不在清單裡" });
+      await replyKeywordList(context);
+      return;
+    }
+    await dependencies.referenceRepository.deleteUserCategoryKeyword(
+      dependencies.ownerId,
+      target.keyword,
+    );
+    await context.answerCallbackQuery({ text: "已刪除" });
+    await context.editMessageText(`已刪除「${target.keyword}」，之後這個詞會重新追問分類。`);
+  });
+
   // 「要記住這個詞嗎」的回答。記住時從草稿重新推導候選詞與已選分類，因此不必為了這段
   // 對話在草稿上多存欄位；使用者若在這之前改過分類，記住的也會是他最後選的那一個。
   bot.callbackQuery(/^k:/, async (context) => {
@@ -298,6 +355,18 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     );
     const keyword = extractResidualKeyword(rawText, references);
     const categoryName = references.categories.find((item) => item.categoryId === categoryId)?.name;
+    if (!keyword && categoryName) {
+      // 記住之後那個詞就成了已知詞，重新推導必定是 undefined。連按兩次很常見（網路慢、
+      // 訊息沒即時更新），這時回「無法記住」等於對著一件已經做好的事報錯。
+      const already = references.userKeywords.find(
+        (item) => rawText.includes(item.keyword) && item.categoryId === categoryId,
+      );
+      if (already) {
+        await context.answerCallbackQuery({ text: "已記住" });
+        await context.editMessageText(`好，之後看到「${already.keyword}」就記成${categoryName}。`);
+        return;
+      }
+    }
     if (!keyword || !categoryName) {
       await context.answerCallbackQuery({ text: "這個詞已經無法記住" });
       return;

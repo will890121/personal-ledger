@@ -6,6 +6,7 @@ import type {
   Tag,
   UserCategoryKeyword,
 } from "../../src/domain/reference-data.js";
+import { normalizeReferenceName } from "../../src/domain/reference-data.js";
 import type {
   NamedReferenceInput,
   ReferenceRepository,
@@ -23,14 +24,22 @@ export class FakeReferenceRepository implements ReferenceRepository {
   }
   public saveUserCategoryKeyword(keyword: UserCategoryKeyword): Promise<void> {
     // 與 SQLite 版本相同的語意：同一個詞再教一次就改指向新分類，不留下兩筆。
-    const normalized = keyword.keyword.normalize("NFKC").trim().toLocaleLowerCase("zh-TW");
+    // 與 SQLite 版共用同一個正規化函式，兩邊語意才不會漂移。
+    const normalized = normalizeReferenceName(keyword.keyword);
     const existing = this.userCategoryKeywords.findIndex(
       (item) =>
-        item.ownerId === keyword.ownerId &&
-        item.keyword.normalize("NFKC").trim().toLocaleLowerCase("zh-TW") === normalized,
+        item.ownerId === keyword.ownerId && normalizeReferenceName(item.keyword) === normalized,
     );
     if (existing >= 0) this.userCategoryKeywords.splice(existing, 1, keyword);
     else this.userCategoryKeywords.push(keyword);
+    return Promise.resolve();
+  }
+  public deleteUserCategoryKeyword(ownerId: string, keyword: string): Promise<void> {
+    const normalized = normalizeReferenceName(keyword);
+    const index = this.userCategoryKeywords.findIndex(
+      (item) => item.ownerId === ownerId && normalizeReferenceName(item.keyword) === normalized,
+    );
+    if (index >= 0) this.userCategoryKeywords.splice(index, 1);
     return Promise.resolve();
   }
   public listActiveAccounts(ownerId: string): Promise<Account[]> {

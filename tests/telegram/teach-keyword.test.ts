@@ -101,4 +101,103 @@ describe("teaching a category keyword", () => {
 
     expect(getText(created.calls.at(-1))).not.toContain("還不認識");
   });
+  it("does not offer after answering a field other than the category", async () => {
+    // 觸發條件是「剛補完的欄位是分類」。這句話的分類靠內建關鍵字「晚餐」就解得出來，
+    // 缺的是金額；補完金額之後草稿也完整了，但使用者並沒有在選分類，不該跳出提議。
+    const created = harness();
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "晚餐 一蘭拉麵" }));
+    const draftRef = firstDraftRef(created.repository);
+    await created.bot.handleUpdate(messageUpdate({ updateId: 2, text: "300" }));
+
+    await created.bot.handleUpdate(callbackUpdate({ updateId: 3, data: `v:${draftRef}:300` }));
+
+    const record = await created.repository.getDraftRecord({ ownerId: "123", draftRef });
+    expect(record?.status).toBe("awaiting_confirmation");
+    expect(getText(created.calls.at(-1))).not.toContain("還不認識");
+  });
+
+  it("prefers the longest taught keyword when two of them match", async () => {
+    const created = harness();
+    created.referenceRepository.userCategoryKeywords.push(
+      { ownerId: "123", keyword: "拉麵", categoryId: "category-transport" },
+      { ownerId: "123", keyword: "一蘭拉麵", categoryId: "category-dining" },
+    );
+
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "一蘭拉麵 200" }));
+
+    const preview = getText(created.calls.at(-1));
+    expect(preview).toContain("餐飲／一蘭拉麵");
+    expect(preview).not.toContain("交通");
+  });
+
+  it("does not offer when the sentence leaves two unknown fragments", async () => {
+    // 剩兩段代表這句話還有別的沒被解析，挑其中一段當關鍵字只是在猜。
+    const created = harness();
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "一蘭拉麵 牛排 300" }));
+    const draftRef = firstDraftRef(created.repository);
+
+    await created.bot.handleUpdate(callbackUpdate({ updateId: 2, data: `a:${draftRef}:cat:0` }));
+
+    expect(getText(created.calls.at(-1))).not.toContain("還不認識");
+  });
+  it("treats a second tap on 記住 as success, not failure", async () => {
+    // 記住之後那個詞就成了「已知詞」，重新推導會得到 undefined。若照著回「無法記住」，
+    // 使用者看到的是一則失敗訊息，而事情其實已經做好了。
+    const { bot, calls, referenceRepository, draftRef } = await answerCategory("牛排 300");
+    await bot.handleUpdate(callbackUpdate({ updateId: 3, data: `k:${draftRef}:1` }));
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 4, data: `k:${draftRef}:1` }));
+
+    expect(referenceRepository.userCategoryKeywords).toHaveLength(1);
+    expect(getText(calls.at(-1))).toContain("記成餐飲");
+    expect(getText(calls.at(-1))).not.toContain("無法記住");
+  });
+});
+
+describe("/keywords", () => {
+  it("lists what has been taught, with a delete button for each", async () => {
+    const created = harness();
+    created.referenceRepository.userCategoryKeywords.push(
+      { ownerId: "123", keyword: "牛排", categoryId: "category-dining" },
+      { ownerId: "123", keyword: "加油站", categoryId: "category-transport" },
+    );
+
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "/keywords" }));
+
+    const text = getText(created.calls.at(-1)) ?? "";
+    expect(text).toContain("牛排 · 餐飲");
+    expect(text).toContain("加油站 · 交通");
+    const payload = JSON.stringify(created.calls.at(-1)?.payload);
+    expect(payload).toContain('"text":"刪除 牛排"');
+    expect(payload).toContain('"text":"刪除 加油站"');
+  });
+
+  it("says so when nothing has been taught yet", async () => {
+    const created = harness();
+
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "/keywords" }));
+
+    expect(getText(created.calls.at(-1))).toContain("還沒有教過任何詞");
+  });
+
+  it("deleting a keyword makes the word ask for a category again", async () => {
+    // 教錯之後那個詞永遠不再追問，也就永遠不會再跳出「要記住嗎」。沒有這條路，
+    // 一次誤觸就會讓之後每一筆含這個詞的交易都被歸錯分類。
+    const created = harness();
+    created.referenceRepository.userCategoryKeywords.push({
+      ownerId: "123",
+      keyword: "牛排",
+      categoryId: "category-transport",
+    });
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "/keywords" }));
+    const payload = JSON.stringify(created.calls.at(-1)?.payload);
+    const data = /"callback_data":"(kd:[^"]+)"/.exec(payload)?.[1] ?? "";
+    expect(data).not.toBe("");
+
+    await created.bot.handleUpdate(callbackUpdate({ updateId: 2, data }));
+
+    expect(created.referenceRepository.userCategoryKeywords).toEqual([]);
+    await created.bot.handleUpdate(messageUpdate({ updateId: 3, text: "牛排 300" }));
+    expect(getText(created.calls.at(-1))).toContain("待補分類");
+  });
 });

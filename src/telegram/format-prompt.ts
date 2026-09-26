@@ -188,3 +188,30 @@ export function formatKeywordOffer(
     },
   };
 }
+
+/**
+ * `/keywords`：列出使用者教過的詞，每個詞配一顆刪除鍵。
+ *
+ * 這是「教錯了」唯一的出路。教過的詞會先於任何追問被命中，所以那個詞再也不會跳出
+ * 「要記住嗎」——沒有這份清單，一次誤觸就會讓之後每一筆含這個詞的交易都被歸錯分類。
+ */
+export function formatKeywordList(
+  keywords: readonly { readonly keyword: string; readonly categoryName: string }[],
+): DraftPrompt {
+  if (keywords.length === 0) {
+    return { text: "還沒有教過任何詞。解不出分類時，補完分類後就會問你要不要記住。" };
+  }
+  return {
+    text: ["教過的詞：", ...keywords.map((item) => `${item.keyword} · ${item.categoryName}`)].join(
+      "\n",
+    ),
+    replyMarkup: {
+      inline_keyboard: keywords.map((item, index) => [
+        {
+          text: `刪除 ${item.keyword}`,
+          callback_data: encodeCallback({ kind: "delete-keyword", index }),
+        },
+      ]),
+    },
+  };
+}

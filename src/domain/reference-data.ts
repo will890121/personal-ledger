@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+/**
+ * 參考資料名稱的正規化：全形／半形與大小寫視為同一個名稱。merchants、counterparties
+ * 與使用者自訂關鍵字共用同一份，比對與唯一鍵才不會各用一套——兩者不一致時，
+ * `Costco` 與 `costco` 會變成「存得進去但比對不到」。
+ */
+export function normalizeReferenceName(name: string): string {
+  return name.normalize("NFKC").trim().toLocaleLowerCase("zh-TW");
+}
+
 export const AccountTypeSchema = z.enum(["cash", "bank", "credit_card", "e_wallet"]);
 export type AccountType = z.infer<typeof AccountTypeSchema>;
 

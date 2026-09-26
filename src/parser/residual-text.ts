@@ -1,4 +1,5 @@
 import type { Account, Counterparty, Merchant } from "../domain/reference-data.js";
+import { normalizeReferenceName } from "../domain/reference-data.js";
 import { categoryKeywords } from "./category-keywords.js";
 
 /**
@@ -33,6 +34,28 @@ const SHARE_MARKERS = [
   "該給",
 ];
 
+// 金額單位不剝的話，「牛排 300元」剝完會剩兩段而永遠不提議；草稿本身解析正常，
+// 所以對習慣寫「元」「塊」的使用者來說，這個功能是無聲失效的。
+const AMOUNT_UNITS = ["NT$", "NTD", "元", "塊", "圓", "錢"];
+// 把名稱從詞的中間剝掉會留下助詞開頭的碎片（「小明的生日禮物」→「的生日禮物」），
+// 那則提議讀起來是壞的；動詞開頭（「買牛排」）則會讓關鍵字帶著動詞，下次只講「牛排」
+// 仍然對不到。兩者都只修剪開頭，不改動詞本身。
+const LEADING_NOISE = [
+  "的",
+  "了",
+  "和",
+  "跟",
+  "與",
+  "及",
+  "買",
+  "付",
+  "花",
+  "刷",
+  "繳",
+  "給",
+  "去",
+];
+
 export interface ResidualReferences {
   readonly accounts?: readonly Account[];
   readonly merchants?: readonly Merchant[];
@@ -62,17 +85,29 @@ export function extractResidualKeyword(
   ].sort((a, b) => b.length - a.length);
   for (const name of names) strip(name);
 
+  for (const unit of AMOUNT_UNITS) strip(unit);
+
   const residual = rest
     .replace(/[+-]?\d+(?:\.\d+)?/g, " ")
-    .replace(/[\s,，、。：:；;（）()「」【】/\\*+-]/g, " ")
+    .replace(/[\s,，、。：:；;（）()「」【】$%％/\\*+-]/g, " ")
     .trim();
 
   // 剝完若散成好幾段，代表這句話還有別的東西沒被解析，不是一個乾淨的候選詞。
   const parts = residual.split(/\s+/).filter((part) => part.length > 0);
   if (parts.length !== 1) return undefined;
 
-  const candidate = parts[0] ?? "";
+  let candidate = parts[0] ?? "";
+  while (LEADING_NOISE.some((noise) => candidate.startsWith(noise))) {
+    candidate = candidate.slice(1);
+  }
   if (candidate.length < MIN_LENGTH || candidate.length > MAX_LENGTH) return undefined;
   if (/\d/.test(candidate)) return undefined;
+  // 修剪之後才能確定它不是一個已經認得的詞（「買牛排」修成「牛排」就可能已經教過了）。
+  const normalized = normalizeReferenceName(candidate);
+  const known = [
+    ...(references.userKeywords ?? []).map((item) => item.keyword),
+    ...categoryKeywords.map((item) => item.keyword),
+  ];
+  if (known.some((word) => normalizeReferenceName(word) === normalized)) return undefined;
   return candidate;
 }

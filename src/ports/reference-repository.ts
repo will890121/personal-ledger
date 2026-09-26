@@ -28,6 +28,7 @@ export interface ReferenceRepository {
   listUserCategoryKeywords(ownerId: string): Promise<UserCategoryKeyword[]>;
   /** 同一個關鍵字再教一次就改指向新分類，不會留下兩筆。 */
   saveUserCategoryKeyword(keyword: UserCategoryKeyword): Promise<void>;
+  deleteUserCategoryKeyword(ownerId: string, keyword: string): Promise<void>;
   upsertCounterparty(input: NamedReferenceInput): Promise<Counterparty>;
   upsertTag(input: NamedReferenceInput): Promise<Tag>;
 }

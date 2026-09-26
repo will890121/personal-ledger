@@ -9,6 +9,7 @@ import {
   MerchantSchema,
   TagSchema,
   UserCategoryKeywordSchema,
+  normalizeReferenceName,
   type Account,
   type Category,
   type Counterparty,
@@ -46,10 +47,6 @@ interface NamedRow {
   merchant_id?: string;
   counterparty_id?: string;
   tag_id?: string;
-}
-
-export function normalizeReferenceName(name: string): string {
-  return name.normalize("NFKC").trim().toLocaleLowerCase("zh-TW");
 }
 
 export class SqliteReferenceRepository implements ReferenceRepository {
@@ -257,7 +254,7 @@ export class SqliteReferenceRepository implements ReferenceRepository {
       .prepare(
         `INSERT INTO user_category_keywords (
            keyword_id, owner_id, keyword, normalized_keyword, category_id, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
          ON CONFLICT (owner_id, normalized_keyword) DO UPDATE SET
            keyword = excluded.keyword,
            category_id = excluded.category_id`,
@@ -268,8 +265,14 @@ export class SqliteReferenceRepository implements ReferenceRepository {
         parsed.keyword,
         normalizeReferenceName(parsed.keyword),
         parsed.categoryId,
-        new Date().toISOString(),
       );
+    return Promise.resolve();
+  }
+
+  public deleteUserCategoryKeyword(ownerId: string, keyword: string): Promise<void> {
+    this.database
+      .prepare("DELETE FROM user_category_keywords WHERE owner_id = ? AND normalized_keyword = ?")
+      .run(ownerId, normalizeReferenceName(keyword));
     return Promise.resolve();
   }
 
@@ -357,3 +360,5 @@ export class SqliteReferenceRepository implements ReferenceRepository {
     });
   }
 }
+
+export { normalizeReferenceName };

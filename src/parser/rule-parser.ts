@@ -146,7 +146,7 @@ function expenseShell(
 ): PartialAllocation[] {
   const shell = {
     allocationId: context.allocationId,
-    fundsEffect: (account?.type === "credit_card" ? "none" : "outflow") as "none" | "outflow",
+    fundsEffect: account?.type === "credit_card" ? ("none" as const) : ("outflow" as const),
     purpose: "expense" as const,
     ...(amount ? { amount } : {}),
   };
