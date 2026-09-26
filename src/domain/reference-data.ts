@@ -59,3 +59,14 @@ export const TagSchema = NamedReferenceSchema.extend({
   normalizedName: z.string().min(1),
 });
 export type Tag = z.infer<typeof TagSchema>;
+
+/**
+ * 使用者自訂的分類關鍵字：內建的 category-keywords 表認不得的詞（「牛排」「一蘭拉麵」），
+ * 由使用者教一次就記住，等於在執行期擴充那張表。
+ */
+export const UserCategoryKeywordSchema = z.object({
+  ownerId: z.string().min(1),
+  keyword: z.string().trim().min(1),
+  categoryId: z.string().min(1),
+});
+export type UserCategoryKeyword = z.infer<typeof UserCategoryKeywordSchema>;

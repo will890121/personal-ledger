@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type Database from "better-sqlite3";
 
 import {
@@ -6,11 +8,13 @@ import {
   CounterpartySchema,
   MerchantSchema,
   TagSchema,
+  UserCategoryKeywordSchema,
   type Account,
   type Category,
   type Counterparty,
   type Merchant,
   type Tag,
+  type UserCategoryKeyword,
 } from "../domain/reference-data.js";
 import type { NamedReferenceInput, ReferenceRepository } from "../ports/reference-repository.js";
 
@@ -226,6 +230,47 @@ export class SqliteReferenceRepository implements ReferenceRepository {
         active: row.active === 1,
       }),
     );
+  }
+
+  public listUserCategoryKeywords(ownerId: string): Promise<UserCategoryKeyword[]> {
+    const rows = this.database
+      .prepare(
+        "SELECT owner_id, keyword, category_id FROM user_category_keywords WHERE owner_id = ? ORDER BY keyword",
+      )
+      .all(ownerId) as { owner_id: string; keyword: string; category_id: string }[];
+    return Promise.resolve(
+      rows.map((row) =>
+        UserCategoryKeywordSchema.parse({
+          ownerId: row.owner_id,
+          keyword: row.keyword,
+          categoryId: row.category_id,
+        }),
+      ),
+    );
+  }
+
+  public saveUserCategoryKeyword(keyword: UserCategoryKeyword): Promise<void> {
+    const parsed = UserCategoryKeywordSchema.parse(keyword);
+    // 同一個詞再教一次就改指向新分類：使用者的第二次回答是更新的意思，不是再開一筆。
+    // 正規化鍵與 merchants／counterparties 共用同一個函式，全形／大小寫視為同一個詞。
+    this.database
+      .prepare(
+        `INSERT INTO user_category_keywords (
+           keyword_id, owner_id, keyword, normalized_keyword, category_id, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner_id, normalized_keyword) DO UPDATE SET
+           keyword = excluded.keyword,
+           category_id = excluded.category_id`,
+      )
+      .run(
+        randomUUID(),
+        parsed.ownerId,
+        parsed.keyword,
+        normalizeReferenceName(parsed.keyword),
+        parsed.categoryId,
+        new Date().toISOString(),
+      );
+    return Promise.resolve();
   }
 
   public upsertCounterparty(input: NamedReferenceInput): Promise<Counterparty> {

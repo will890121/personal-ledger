@@ -1,5 +1,11 @@
 import type { ConfirmedTransaction } from "../domain/ledger.js";
-import type { Account, Category, Counterparty, Merchant } from "../domain/reference-data.js";
+import type {
+  Account,
+  Category,
+  Counterparty,
+  Merchant,
+  UserCategoryKeyword,
+} from "../domain/reference-data.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 import type { ReferenceRepository } from "../ports/reference-repository.js";
 
@@ -8,19 +14,22 @@ export interface ReferenceSnapshot {
   readonly categories: readonly Category[];
   readonly merchants: readonly Merchant[];
   readonly counterparties: readonly Counterparty[];
+  /** 使用者教過的分類關鍵字；ParseContext 直接展開這份快照，因此加在這裡就會流進解析器。 */
+  readonly userKeywords: readonly UserCategoryKeyword[];
 }
 
 export async function loadReferenceSnapshot(
   repository: ReferenceRepository,
   ownerId: string,
 ): Promise<ReferenceSnapshot> {
-  const [accounts, categories, merchants, counterparties] = await Promise.all([
+  const [accounts, categories, merchants, counterparties, userKeywords] = await Promise.all([
     repository.listActiveAccounts(ownerId),
     repository.listActiveCategories(ownerId),
     repository.listActiveMerchants(ownerId),
     repository.listActiveCounterparties(ownerId),
+    repository.listUserCategoryKeywords(ownerId),
   ]);
-  return { accounts, categories, merchants, counterparties };
+  return { accounts, categories, merchants, counterparties, userKeywords };
 }
 
 export async function listRefundCandidates(

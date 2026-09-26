@@ -9,6 +9,7 @@ const migrations = [
   { version: 4, url: new URL("./migrations/0004_settings.sql", import.meta.url) },
   { version: 5, url: new URL("./migrations/0005_advance_recovery.sql", import.meta.url) },
   { version: 6, url: new URL("./migrations/0006_dining_category.sql", import.meta.url) },
+  { version: 7, url: new URL("./migrations/0007_user_category_keywords.sql", import.meta.url) },
 ] as const;
 
 export function migrate(database: Database.Database): void {

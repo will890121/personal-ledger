@@ -233,4 +233,80 @@ describe("parseTransaction", () => {
     });
     expect(merchantOnly.draft.allocations[0]?.subcategory).toBeUndefined();
   });
+  it("uses a keyword the user taught, with the keyword itself as the subcategory", () => {
+    const taught = {
+      ...bootstrappedContext,
+      userKeywords: [{ ownerId: "123", keyword: "牛排", categoryId: "category-dining" }],
+    };
+
+    const result = parseTransaction("牛排 300", taught);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.allocations[0]).toMatchObject({
+      categoryId: "category-dining",
+      category: "餐飲",
+      subcategory: "牛排",
+    });
+  });
+
+  it("omits the subcategory when the taught keyword is the category's own name", () => {
+    // 否則會印出「餐飲／餐飲」，就是 M2 「午餐／午餐」那個重複的翻版。
+    const taught = {
+      ...bootstrappedContext,
+      userKeywords: [{ ownerId: "123", keyword: "餐飲", categoryId: "category-dining" }],
+    };
+
+    const result = parseTransaction("餐飲 300", taught);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.allocations[0]?.category).toBe("餐飲");
+    expect(result.draft.allocations[0]?.subcategory).toBeUndefined();
+  });
+
+  it("lets a taught keyword win over the built-in table", () => {
+    // 使用者明確教過的，比內建表的預設猜測強。
+    const taught = {
+      ...bootstrappedContext,
+      categories: [
+        ...bootstrappedContext.categories,
+        {
+          categoryId: "category-entertainment",
+          ownerId: "123",
+          key: "expense_entertainment",
+          name: "娛樂",
+          kind: "expense" as const,
+          parentId: "category-expense",
+          depth: 2 as const,
+          active: true,
+        },
+      ],
+      userKeywords: [{ ownerId: "123", keyword: "晚餐", categoryId: "category-entertainment" }],
+    };
+
+    const result = parseTransaction("晚餐 300", taught);
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.allocations[0]).toMatchObject({
+      categoryId: "category-entertainment",
+      category: "娛樂",
+      subcategory: "晚餐",
+    });
+  });
+
+  it("ignores a taught keyword whose category no longer exists", () => {
+    // 分類被停用或刪掉之後，關鍵字不該讓草稿指向一個查不到的分類。
+    const taught = {
+      ...bootstrappedContext,
+      userKeywords: [{ ownerId: "123", keyword: "牛排", categoryId: "category-gone" }],
+    };
+
+    const result = parseTransaction("牛排 300", taught);
+
+    expect(result.kind).toBe("missing_fields");
+    if (result.kind !== "missing_fields") return;
+    expect(result.fields).toEqual(["category"]);
+  });
 });

@@ -154,3 +154,37 @@ export function formatBatchSummary(items: readonly BatchItem[]): string {
   ];
   return `${String(items.length)} 筆：${parts.join("、")}`;
 }
+
+/**
+ * 分類補完之後，提議把句子裡那個不認得的詞記成使用者自訂關鍵字。
+ *
+ * 刻意排在預覽之後、獨立一則：分類追問的流程完全不變，草稿此時已經完整，所以誤判時
+ * 「不用」只是一下，而且不影響已經做完的事。殘餘文字偵測分不出「一蘭拉麵」是店名而
+ * 「牛排」是品項，也分不出「雜支」兩者都不是——因此這裡只能提議，不能自作主張。
+ */
+export function formatKeywordOffer(
+  keyword: string,
+  categoryName: string,
+  draftRef: string,
+): DraftPrompt {
+  return {
+    text: [
+      `還不認識「${keyword}」，要記住嗎？`,
+      `記住之後，下次看到「${keyword}」就直接歸到${categoryName}，不再追問。`,
+    ].join("\n"),
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          {
+            text: "記住",
+            callback_data: encodeCallback({ kind: "teach-keyword", draftRef, remember: true }),
+          },
+          {
+            text: "不用",
+            callback_data: encodeCallback({ kind: "teach-keyword", draftRef, remember: false }),
+          },
+        ],
+      ],
+    },
+  };
+}

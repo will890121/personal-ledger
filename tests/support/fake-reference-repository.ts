@@ -4,6 +4,7 @@ import type {
   Counterparty,
   Merchant,
   Tag,
+  UserCategoryKeyword,
 } from "../../src/domain/reference-data.js";
 import type {
   NamedReferenceInput,
@@ -15,7 +16,23 @@ export class FakeReferenceRepository implements ReferenceRepository {
   public readonly categories: Category[] = [];
   public readonly merchants: Merchant[] = [];
   public readonly counterparties: Counterparty[] = [];
+  public readonly userCategoryKeywords: UserCategoryKeyword[] = [];
 
+  public listUserCategoryKeywords(ownerId: string): Promise<UserCategoryKeyword[]> {
+    return Promise.resolve(this.userCategoryKeywords.filter((item) => item.ownerId === ownerId));
+  }
+  public saveUserCategoryKeyword(keyword: UserCategoryKeyword): Promise<void> {
+    // 與 SQLite 版本相同的語意：同一個詞再教一次就改指向新分類，不留下兩筆。
+    const normalized = keyword.keyword.normalize("NFKC").trim().toLocaleLowerCase("zh-TW");
+    const existing = this.userCategoryKeywords.findIndex(
+      (item) =>
+        item.ownerId === keyword.ownerId &&
+        item.keyword.normalize("NFKC").trim().toLocaleLowerCase("zh-TW") === normalized,
+    );
+    if (existing >= 0) this.userCategoryKeywords.splice(existing, 1, keyword);
+    else this.userCategoryKeywords.push(keyword);
+    return Promise.resolve();
+  }
   public listActiveAccounts(ownerId: string): Promise<Account[]> {
     return Promise.resolve(this.accounts.filter((item) => item.ownerId === ownerId && item.active));
   }

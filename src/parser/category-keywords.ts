@@ -140,3 +140,17 @@ export function matchMerchantCategory(name: string): CategoryMatch | undefined {
     ...(hit.subcategory ? { subcategory: hit.subcategory } : {}),
   };
 }
+
+/**
+ * 使用者自訂關鍵字的比對。與內建表同樣是子字串包含、最長優先；長度相同時取先出現的
+ * （listUserCategoryKeywords 依關鍵字排序，順序因此是穩定的）。
+ */
+export function matchUserKeyword<T extends { readonly keyword: string }>(
+  text: string,
+  keywords: readonly T[] | undefined,
+): T | undefined {
+  if (!keywords || keywords.length === 0) return undefined;
+  return [...keywords]
+    .sort((a, b) => b.keyword.length - a.keyword.length)
+    .find((entry) => text.includes(entry.keyword));
+}

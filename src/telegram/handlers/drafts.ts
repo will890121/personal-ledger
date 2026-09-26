@@ -6,15 +6,17 @@ import { cancelDraft, confirmDraft } from "../../application/confirm-draft.js";
 import { answerDraft, type AnswerValue } from "../../application/answer-draft.js";
 import { createBatch, type CreateBatchResult } from "../../application/create-batch.js";
 import { listPending } from "../../application/list-pending.js";
-import { loadReferenceSnapshot } from "../../application/reference-data.js";
+import { loadReferenceSnapshot, type ReferenceSnapshot } from "../../application/reference-data.js";
 import { recordRecovery } from "../../application/record-recovery.js";
 import { IncompleteDraftSchema, type ParseField } from "../../domain/draft.js";
+import type { TransactionDraft } from "../../domain/ledger.js";
 import type { DraftRecord } from "../../ports/ledger-repository.js";
+import { extractResidualKeyword } from "../../parser/residual-text.js";
 import { parseRepayment } from "../../parser/split-share.js";
 import { decodeCallback, encodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
 import { formatPreview } from "../format-preview.js";
-import { formatBatchSummary, formatPrompt } from "../format-prompt.js";
+import { formatBatchSummary, formatKeywordOffer, formatPrompt } from "../format-prompt.js";
 import { deliverRecoveryResult, handleRecoveryReply, loadIncomeCategoryIds } from "./advances.js";
 
 const AMOUNT_ONLY = /^\d+(?:\.\d+)?$/;
@@ -66,6 +68,9 @@ async function applyAnswer(
     await context.editMessageText(message.text, {
       ...(message.replyMarkup ? { reply_markup: message.replyMarkup } : {}),
     });
+    if (result.kind === "draft" && field === "category") {
+      await offerKeyword(context, result.draft, record.draftRef, references);
+    }
     return;
   }
 
@@ -77,6 +82,29 @@ async function applyAnswer(
     String(sent.chat.id),
     String(sent.message_id),
   );
+}
+
+/**
+ * 分類補完之後，若句子裡還有一個解析器交代不出來的詞，提議把它記成使用者自訂關鍵字。
+ * 只在這個時點提議：草稿此時已經完整，誤判時按「不用」不影響任何已完成的事。
+ */
+async function offerKeyword(
+  context: Context,
+  draft: TransactionDraft,
+  draftRef: string,
+  references: ReferenceSnapshot,
+): Promise<void> {
+  // rawInputSnapshot 是選填的：沒有原句就無從推導候選詞，靜靜跳過即可。
+  if (!draft.rawInputSnapshot) return;
+  const keyword = extractResidualKeyword(draft.rawInputSnapshot, references);
+  if (!keyword) return;
+  const categoryId = draft.allocations[0]?.categoryId;
+  const categoryName = references.categories.find((item) => item.categoryId === categoryId)?.name;
+  if (!categoryName) return;
+  const offer = formatKeywordOffer(keyword, categoryName, draftRef);
+  await context.reply(offer.text, {
+    ...(offer.replyMarkup ? { reply_markup: offer.replyMarkup } : {}),
+  });
 }
 
 // 交易對象的文字回覆不是「答案本身」，而是「想建立的名字」：先把它記成
@@ -238,6 +266,49 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     await context.editMessageText(
       `已入帳：${transaction.amount.currency} ${transaction.amount.amount}\n交易 ID：${transaction.transactionId}`,
     );
+  });
+
+  // 「要記住這個詞嗎」的回答。記住時從草稿重新推導候選詞與已選分類，因此不必為了這段
+  // 對話在草稿上多存欄位；使用者若在這之前改過分類，記住的也會是他最後選的那一個。
+  bot.callbackQuery(/^k:/, async (context) => {
+    const action = decodeCallback(context.callbackQuery.data);
+    if (action?.kind !== "teach-keyword") {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+    if (!action.remember) {
+      await context.answerCallbackQuery();
+      await context.editMessageText("好，這次不記。");
+      return;
+    }
+    const record = await dependencies.repository.getDraftRecord({
+      ownerId: dependencies.ownerId,
+      draftRef: action.draftRef,
+    });
+    const draft = record?.draft;
+    const rawText = draft?.rawInputSnapshot;
+    const categoryId = draft?.allocations[0]?.categoryId;
+    if (!rawText || !categoryId) {
+      await context.answerCallbackQuery({ text: "草稿不存在或已處理" });
+      return;
+    }
+    const references = await loadReferenceSnapshot(
+      dependencies.referenceRepository,
+      dependencies.ownerId,
+    );
+    const keyword = extractResidualKeyword(rawText, references);
+    const categoryName = references.categories.find((item) => item.categoryId === categoryId)?.name;
+    if (!keyword || !categoryName) {
+      await context.answerCallbackQuery({ text: "這個詞已經無法記住" });
+      return;
+    }
+    await dependencies.referenceRepository.saveUserCategoryKeyword({
+      ownerId: dependencies.ownerId,
+      keyword,
+      categoryId,
+    });
+    await context.answerCallbackQuery({ text: "已記住" });
+    await context.editMessageText(`好，之後看到「${keyword}」就記成${categoryName}。`);
   });
 
   // 追問訊息上的取消鍵。預覽用的是舊的 `cancel:<draftId>`（draftId 是 UUID），追問手上
