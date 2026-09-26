@@ -39,6 +39,88 @@ describe("formatPreview", () => {
     ]);
   });
 
+  it("renders a single-allocation draft as a blank-line-separated tree block", () => {
+    // 鎖定版型 D 的完整輸出：總額與配置區塊之間空一行，配置本身用
+    // 「▸ 資金效果 · 用途」與縮排「分類 · 幣別 金額」兩行呈現。
+    const preview = formatPreview(draft);
+
+    expect(preview.text).toBe(
+      ["日期：2026-09-18", "總金額：TWD 120", "", "資金流出 · 支出", "└ 餐飲／午餐 · TWD 120"].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("renders a multi-allocation split with per-person tree entries", () => {
+    // 對應使用者驗收時指定的三人分帳範例：每筆配置各自成一個樹狀節點，
+    // 資金效果與用途放在第一行、交易對象附加在用途後方括號中。
+    const preview = formatPreview(
+      {
+        ...draft,
+        occurredDate: "2026-09-25",
+        amount: { amount: "1000", currency: "TWD" },
+        allocations: [
+          {
+            ...baseAllocation,
+            allocationId: "self",
+            amount: { amount: "332", currency: "TWD" },
+            category: "餐飲",
+            subcategory: "午餐",
+          },
+          {
+            ...baseAllocation,
+            allocationId: "xiaoming-share",
+            amount: { amount: "334", currency: "TWD" },
+            purpose: "advance",
+            category: "餐飲",
+            subcategory: "午餐",
+            counterpartyId: "xiaoming",
+          },
+          {
+            ...baseAllocation,
+            allocationId: "xiaohua-share",
+            amount: { amount: "334", currency: "TWD" },
+            purpose: "advance",
+            category: "餐飲",
+            subcategory: "午餐",
+            counterpartyId: "xiaohua",
+          },
+        ],
+      },
+      {
+        counterparties: [
+          { counterpartyId: "xiaoming", ownerId: "123", name: "小明", active: true },
+          { counterpartyId: "xiaohua", ownerId: "123", name: "小華", active: true },
+        ],
+      },
+    );
+
+    expect(preview.text).toBe(
+      [
+        "日期：2026-09-25",
+        "總金額：TWD 1000",
+        "",
+        "資金流出 · 支出",
+        "└ 餐飲／午餐 · TWD 332",
+        "資金流出 · 代墊 (小明)",
+        "└ 餐飲／午餐 · TWD 334",
+        "資金流出 · 代墊 (小華)",
+        "└ 餐飲／午餐 · TWD 334",
+      ].join("\n"),
+    );
+  });
+
+  it("falls back to the counterparty id when the name cannot be resolved", () => {
+    const preview = formatPreview({
+      ...draft,
+      allocations: [
+        { ...baseAllocation, purpose: "advance_recovery", counterpartyId: "unknown-id" },
+      ],
+    });
+
+    expect(preview.text).toContain("資金流出 · 代墊收回 (unknown-id)");
+  });
+
   it("shows every allocation and the credit-card cash effect", () => {
     const preview = formatPreview({
       ...draft,
@@ -62,8 +144,8 @@ describe("formatPreview", () => {
         },
       ],
     });
-    expect(preview.text).toContain("配置 1：轉帳 · 內部移轉");
-    expect(preview.text).toContain("配置 2：手續費 · 資金流出");
+    expect(preview.text).toContain("內部移轉 · 轉帳");
+    expect(preview.text).toContain("資金流出 · 手續費");
 
     const credit = formatPreview({
       ...draft,

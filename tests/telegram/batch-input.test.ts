@@ -20,7 +20,7 @@ function seedReferences(referenceRepository: FakeReferenceRepository): void {
     {
       categoryId: "category-lunch",
       ownerId: "123",
-      key: "expense_dining_lunch",
+      key: "expense_dining",
       name: "餐飲",
       kind: "expense",
       parentId: "category-expense",
@@ -68,7 +68,7 @@ describe("batch input", () => {
   it("previews the parsable segments and prompts for the incomplete one for AC-10", async () => {
     const { bot, calls, repository } = harness();
 
-    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120，Uber 245，咖啡 90" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120，Uber 245，雜支 90" }));
 
     const sent = texts(calls);
     expect(sent).toHaveLength(4);

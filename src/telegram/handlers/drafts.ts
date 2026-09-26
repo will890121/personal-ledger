@@ -7,12 +7,15 @@ import { answerDraft, type AnswerValue } from "../../application/answer-draft.js
 import { createBatch, type CreateBatchResult } from "../../application/create-batch.js";
 import { listPending } from "../../application/list-pending.js";
 import { loadReferenceSnapshot } from "../../application/reference-data.js";
-import type { ParseField } from "../../domain/draft.js";
+import { recordRecovery } from "../../application/record-recovery.js";
+import { IncompleteDraftSchema, type ParseField } from "../../domain/draft.js";
 import type { DraftRecord } from "../../ports/ledger-repository.js";
+import { parseRepayment } from "../../parser/split-share.js";
 import { decodeCallback, encodeCallback } from "../callback-data.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
 import { formatPreview } from "../format-preview.js";
 import { formatBatchSummary, formatPrompt } from "../format-prompt.js";
+import { deliverRecoveryResult, handleRecoveryReply, loadIncomeCategoryIds } from "./advances.js";
 
 const AMOUNT_ONLY = /^\d+(?:\.\d+)?$/;
 
@@ -74,6 +77,84 @@ async function applyAnswer(
     String(sent.chat.id),
     String(sent.message_id),
   );
+}
+
+// 交易對象的文字回覆不是「答案本身」，而是「想建立的名字」：先把它記成
+// proposedName 並重新追問確認，等使用者按下建立才真正落成 counterpartyId，
+// 避免打字誤觸就直接建立一個對象。
+async function proposeCounterparty(
+  context: Context,
+  record: DraftRecord,
+  proposedName: string,
+  dependencies: LedgerBotDependencies,
+): Promise<void> {
+  if (!record.incomplete) return;
+  const trimmed = proposedName.trim();
+  if (trimmed.length === 0) {
+    await context.reply("交易對象名稱不能是空白，請重新輸入。");
+    return;
+  }
+
+  const pendingFields = record.incomplete.pendingFields.map((item) =>
+    item.field === "counterparty" ? { ...item, proposedName: trimmed } : item,
+  );
+  const updated = IncompleteDraftSchema.parse({ ...record.incomplete, pendingFields });
+  await dependencies.repository.replaceDraft(record.draftId, updated);
+
+  const references = await loadReferenceSnapshot(
+    dependencies.referenceRepository,
+    dependencies.ownerId,
+  );
+  const message = formatPrompt(updated, record.draftRef, references);
+  const sent = await context.reply(message.text, {
+    ...(message.replyMarkup ? { reply_markup: message.replyMarkup } : {}),
+  });
+  await dependencies.repository.setPreviewMessage(
+    record.draftId,
+    String(sent.chat.id),
+    String(sent.message_id),
+  );
+}
+
+/**
+ * 打字直接輸入的回收語句（「小明還 300」「收到小明 300」）：必須排在純數字
+ * 攔截之後、createBatch 之前嘗試，且對象名稱要與交易對象完全相符才觸發，
+ * 否則「小明還欠我錢」這類一般敘述、或「午餐 120」這類一般支出，都可能被
+ * 誤判或搶走輸入。parseRepayment 找不到相符對象時回傳 null，此時放行給
+ * createBatch 當成一般交易解析。
+ *
+ * 回傳 true 代表這則訊息已被本函式處理完畢，呼叫端不應該再往下走。
+ */
+async function tryRecordRecoveryFromText(
+  context: Context,
+  dependencies: LedgerBotDependencies,
+): Promise<boolean> {
+  const counterparties = await dependencies.referenceRepository.listActiveCounterparties(
+    dependencies.ownerId,
+  );
+  const repayment = parseRepayment(context.message?.text ?? "", counterparties);
+  if (!repayment) return false;
+
+  const result = await recordRecovery(
+    {
+      ownerId: dependencies.ownerId,
+      counterpartyId: repayment.counterpartyId,
+      received: repayment.amount,
+      occurredDate: dependencies.today(),
+      telegramUpdateId: String(context.update.update_id),
+      sourceRef: `${String(context.chat?.id ?? "")}:${String(context.message?.message_id ?? "")}`,
+      rawText: context.message?.text ?? "",
+      receivedAt: dependencies.now().toISOString(),
+    },
+    {
+      repository: dependencies.repository,
+      generateId: dependencies.generateId,
+      incomeCategoryIds: await loadIncomeCategoryIds(dependencies),
+    },
+  );
+
+  await deliverRecoveryResult(context, result, dependencies);
+  return true;
 }
 
 async function handleBatchResult(
@@ -159,6 +240,35 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     );
   });
 
+  // 追問訊息上的取消鍵。預覽用的是舊的 `cancel:<draftId>`（draftId 是 UUID），追問手上
+  // 只有 8 碼 draftRef，因此走 `x:<draftRef>` 這條。
+  bot.callbackQuery(/^x:/, async (context) => {
+    const action = decodeCallback(context.callbackQuery.data);
+    if (action?.kind !== "cancel") {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+    const record = await dependencies.repository.getDraftRecord({
+      ownerId: dependencies.ownerId,
+      draftRef: action.draftRef,
+    });
+    if (!record) {
+      await context.answerCallbackQuery({ text: "草稿不存在或已處理" });
+      return;
+    }
+    // 追問中的草稿是 IncompleteDraft，cancelDraft 會以 TransactionDraftSchema 解析既有
+    // JSON，對它必定丟「draft not found」。放棄一筆未完成草稿在 M3a 已經定義為封存
+    // （/pending 的「封存」鍵走的就是這條），這裡沿用同一個操作，不另立一個語意重複的
+    // 狀態；對使用者而言兩者都是「這筆不再出現在待處理清單」。
+    if (record.incomplete) {
+      await dependencies.repository.archiveDraft(record.draftId);
+    } else {
+      await cancelDraft(dependencies.repository, record.draftId);
+    }
+    await context.answerCallbackQuery({ text: "已取消" });
+    await context.editMessageText("草稿已取消。");
+  });
+
   bot.callbackQuery(/^cancel:/, async (context) => {
     const draftId = context.callbackQuery.data.slice("cancel:".length);
     await cancelDraft(dependencies.repository, draftId);
@@ -169,12 +279,22 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
   bot.on("message:text", async (context) => {
     const replyTo = context.message.reply_to_message;
     if (replyTo) {
+      // 代墊回收金額的回覆必須綁定「收到多少？」那則發問訊息，並且排在
+      // 草稿回覆與下面的純數字攔截之前處理，否則會被那條規則劫走。
+      if (await handleRecoveryReply(context, dependencies)) return;
+
       const record = await dependencies.repository.getDraftRecord({
         previewChatId: String(context.chat.id),
         previewMessageId: String(replyTo.message_id),
       });
       if (record?.incomplete) {
         const field = record.incomplete.pendingFields[0]?.field ?? "amount";
+        if (field === "counterparty") {
+          await proposeCounterparty(context, record, context.message.text, dependencies);
+          return;
+        }
+        // amount 與 advanceShare 都是純數字追問，走同一條「金額」回答路徑；
+        // patchFor 會依欄位分別套用到總額或每人負擔金額。
         await applyAnswer(
           context,
           record,
@@ -215,6 +335,8 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
         return;
       }
     }
+
+    if (await tryRecordRecoveryFromText(context, dependencies)) return;
 
     const result = await createBatch(
       {
@@ -275,6 +397,7 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     const label =
       references.categories.find((item) => item.categoryId === candidateId)?.name ??
       references.accounts.find((item) => item.accountId === candidateId)?.name ??
+      references.counterparties.find((item) => item.counterpartyId === candidateId)?.name ??
       candidateId;
     await context.answerCallbackQuery();
     await applyAnswer(
@@ -282,6 +405,41 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       record,
       action.field,
       { kind: "reference", id: candidateId, label },
+      dependencies,
+    );
+  });
+
+  bot.callbackQuery(/^c:/, async (context) => {
+    const action = decodeCallback(context.callbackQuery.data);
+    if (!action || action.kind !== "create-counterparty") {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+    const record = await dependencies.repository.getDraftRecord({
+      ownerId: dependencies.ownerId,
+      draftRef: action.draftRef,
+    });
+    if (!record?.incomplete) {
+      await context.answerCallbackQuery({ text: "草稿不存在或已處理" });
+      return;
+    }
+    const pending = record.incomplete.pendingFields.find((item) => item.field === "counterparty");
+    if (!pending?.proposedName) {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+
+    const counterparty = await dependencies.referenceRepository.upsertCounterparty({
+      referenceId: dependencies.generateId(),
+      ownerId: dependencies.ownerId,
+      name: pending.proposedName,
+    });
+    await context.answerCallbackQuery();
+    await applyAnswer(
+      context,
+      record,
+      "counterparty",
+      { kind: "reference", id: counterparty.counterpartyId, label: counterparty.name },
       dependencies,
     );
   });

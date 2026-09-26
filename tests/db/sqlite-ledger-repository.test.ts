@@ -5,6 +5,7 @@ import { openDatabase } from "../../src/db/database.js";
 import { migrate } from "../../src/db/migrate.js";
 import { SqliteLedgerRepository } from "../../src/db/sqlite-ledger-repository.js";
 import type { TransactionDraft } from "../../src/domain/ledger.js";
+import { seedM1Ledger } from "../fixtures/m1-ledger.js";
 
 const draft: TransactionDraft = {
   draftId: "draft-1",
@@ -25,6 +26,92 @@ const draft: TransactionDraft = {
   ],
   status: "awaiting_confirmation",
 };
+
+// 建立一筆含代墊配置的已確認交易，再確認一筆帶 recoversAllocationId 的回收草稿，
+// 用於驗證 recovers_allocation_id 欄位的讀寫往返。
+// 注意：confirmDraft 內部以 randomUUID() 產生 transactionId，無法指定為固定字串，
+// 因此改為回傳實際產生的 recoveryTransactionId 供測試查詢。
+async function setupConfirmedAdvance(): Promise<{
+  repository: SqliteLedgerRepository;
+  recoveryTransactionId: string;
+}> {
+  const advanceDatabase = openDatabase(":memory:");
+  migrate(advanceDatabase);
+  const repository = new SqliteLedgerRepository(advanceDatabase);
+
+  advanceDatabase
+    .prepare(
+      "INSERT INTO counterparties (counterparty_id, owner_id, name, normalized_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("counterparty-1", "owner-1", "朋友", "朋友");
+
+  await repository.recordInputEvent({
+    eventId: "advance-event",
+    ownerId: "owner-1",
+    telegramUpdateId: "advance-update",
+    sourceType: "telegram",
+    sourceRef: "advance-message",
+    rawText: "代墊 120",
+    receivedAt: "2026-09-24T01:00:00.000Z",
+  });
+  await repository.saveDraft({
+    draftId: "advance-draft",
+    ownerId: "owner-1",
+    requestId: "advance-request",
+    sourceEventId: "advance-event",
+    occurredDate: "2026-09-24",
+    amount: { amount: "120", currency: "TWD" },
+    allocations: [
+      {
+        allocationId: "advance-allocation",
+        fundsEffect: "outflow",
+        purpose: "advance",
+        amount: { amount: "120", currency: "TWD" },
+        category: "代墊",
+        counterpartyId: "counterparty-1",
+      },
+    ],
+    status: "awaiting_confirmation",
+  });
+  await repository.confirmDraft("advance-draft", "2026-09-24T01:01:00.000Z", "advance-audit");
+
+  await repository.recordInputEvent({
+    eventId: "recovery-event",
+    ownerId: "owner-1",
+    telegramUpdateId: "recovery-update",
+    sourceType: "telegram",
+    sourceRef: "recovery-message",
+    rawText: "代墊回收 120",
+    receivedAt: "2026-09-24T02:00:00.000Z",
+  });
+  await repository.saveDraft({
+    draftId: "recovery-draft",
+    ownerId: "owner-1",
+    requestId: "recovery-request",
+    sourceEventId: "recovery-event",
+    occurredDate: "2026-09-24",
+    amount: { amount: "120", currency: "TWD" },
+    allocations: [
+      {
+        allocationId: "recovery-allocation",
+        fundsEffect: "inflow",
+        purpose: "advance_recovery",
+        amount: { amount: "120", currency: "TWD" },
+        category: "代墊回收",
+        counterpartyId: "counterparty-1",
+        recoversAllocationId: "advance-allocation",
+      },
+    ],
+    status: "awaiting_confirmation",
+  });
+  const recovery = await repository.confirmDraft(
+    "recovery-draft",
+    "2026-09-24T02:01:00.000Z",
+    "recovery-audit",
+  );
+
+  return { repository, recoveryTransactionId: recovery.transactionId };
+}
 
 describe("SqliteLedgerRepository", () => {
   let database: Database.Database;
@@ -288,5 +375,67 @@ describe("SqliteLedgerRepository", () => {
     expect(database.prepare("SELECT COUNT(*) AS count FROM transactions").get()).toEqual({
       count: 0,
     });
+  });
+
+  it("round-trips the recovery reference on an allocation", async () => {
+    const { repository: advanceRepository, recoveryTransactionId } = await setupConfirmedAdvance();
+
+    const transaction = await advanceRepository.getTransaction("owner-1", recoveryTransactionId);
+
+    expect(transaction?.allocations[0]?.recoversAllocationId).toBe("advance-allocation");
+  });
+  it("reuses the migrated 餐飲 category for an allocation that carries no categoryId", async () => {
+    // 必須用「由 M1 升級上來」的資料庫，這才是 id 會分岔的場景：migration 0002 建的
+    // category_id 是 'm2:<owner>:expense_dining_lunch'，0006 只改 key／name，而全新安裝
+    // 由 bootstrap 種的是 'm2:<owner>:expense_dining'。ensureLegacyCategory 若直接組 id
+    // 再 INSERT OR IGNORE，在升級過的帳本上會被 UNIQUE (owner_id, key) 靜靜吃掉並回傳
+    // 一個不存在的 id，緊接著的 allocation 寫入就踩外鍵。
+    // （全新安裝兩邊組出來的 id 相同，測不出這個分岔。）
+    const upgraded = openDatabase(":memory:");
+    try {
+      seedM1Ledger(upgraded);
+      migrate(upgraded);
+      const upgradedRepository = new SqliteLedgerRepository(upgraded);
+      const migrated = upgraded
+        .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
+        .get("owner-1", "expense_dining") as { category_id: string };
+      expect(migrated.category_id).toBe("m2:owner-1:expense_dining_lunch");
+
+      await upgradedRepository.recordInputEvent({
+        eventId: "upgrade-event",
+        ownerId: "owner-1",
+        telegramUpdateId: "upgrade-update",
+        sourceType: "telegram",
+        sourceRef: "upgrade-message",
+        rawText: "午餐 120",
+        receivedAt: "2026-09-26T01:00:00.000Z",
+      });
+      await upgradedRepository.saveDraft({
+        ...draft,
+        draftId: "upgrade-draft",
+        ownerId: "owner-1",
+        requestId: "upgrade-request",
+        sourceEventId: "upgrade-event",
+      });
+      const confirmed = await upgradedRepository.confirmDraft(
+        "upgrade-draft",
+        "2026-09-26T01:01:00.000Z",
+        "upgrade-audit",
+      );
+
+      expect(
+        upgraded
+          .prepare("SELECT category_id FROM allocations WHERE transaction_id = ?")
+          .get(confirmed.transactionId),
+      ).toEqual({ category_id: migrated.category_id });
+      expect(
+        upgraded
+          .prepare("SELECT count(*) AS total FROM categories WHERE owner_id = ? AND key = ?")
+          .get("owner-1", "expense_dining"),
+      ).toEqual({ total: 1 });
+      expect(upgraded.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      upgraded.close();
+    }
   });
 });

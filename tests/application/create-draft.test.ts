@@ -150,8 +150,8 @@ describe("createDraft", () => {
     referenceRepository.categories.push({
       categoryId: "lunch",
       ownerId: "123",
-      key: "expense_dining_lunch",
-      name: "午餐",
+      key: "expense_dining",
+      name: "餐飲",
       kind: "expense",
       parentId: "expense",
       depth: 2,

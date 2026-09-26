@@ -20,7 +20,14 @@ describe("M2 accounting core migration", () => {
 
     expect(
       database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    ).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 4 },
+      { version: 5 },
+      { version: 6 },
+    ]);
     expect(
       database
         .prepare(
@@ -33,7 +40,9 @@ describe("M2 accounting core migration", () => {
     ).toEqual({
       transaction_id: original.transactionId,
       source_event_id: original.sourceEventId,
-      category_key: "expense_dining_lunch",
+      // 0006 之後同一列的 key 是 expense_dining（category_id 不變），
+      // 見 migrate-dining-category.test.ts。
+      category_key: "expense_dining",
     });
     expect(
       database

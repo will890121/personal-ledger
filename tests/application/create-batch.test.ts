@@ -10,7 +10,7 @@ function setup() {
   referenceRepository.categories.push({
     categoryId: "category-lunch",
     ownerId: "owner-1",
-    key: "expense_dining_lunch",
+    key: "expense_dining",
     name: "餐飲",
     kind: "expense",
     parentId: "category-expense",
@@ -60,7 +60,7 @@ describe("createBatch", () => {
 
     // 缺欄位的段落必須自己帶金額才會獨立成段：不含金額的段落會依切分規則併回前一段。
     const result = await createBatch(
-      { ...baseCommand, text: "午餐 120，午餐 60，咖啡 90" },
+      { ...baseCommand, text: "午餐 120，午餐 60，雜支 90" },
       dependencies,
     );
 
@@ -77,7 +77,7 @@ describe("createBatch", () => {
   it("offers category candidates when the category cannot be resolved", async () => {
     const { dependencies } = setup();
 
-    const result = await createBatch({ ...baseCommand, text: "咖啡 60" }, dependencies);
+    const result = await createBatch({ ...baseCommand, text: "雜支 60" }, dependencies);
 
     expect(result.kind).toBe("batch");
     if (result.kind !== "batch") return;

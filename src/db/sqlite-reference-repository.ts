@@ -87,6 +87,29 @@ export class SqliteReferenceRepository implements ReferenceRepository {
     );
   }
 
+  public listActiveCounterparties(ownerId: string): Promise<Counterparty[]> {
+    const rows = this.database
+      .prepare(
+        "SELECT counterparty_id, owner_id, name, active FROM counterparties WHERE owner_id = ? AND active = 1 ORDER BY name",
+      )
+      .all(ownerId) as {
+      counterparty_id: string;
+      owner_id: string;
+      name: string;
+      active: number;
+    }[];
+    return Promise.resolve(
+      rows.map((row) =>
+        CounterpartySchema.parse({
+          counterpartyId: row.counterparty_id,
+          ownerId: row.owner_id,
+          name: row.name,
+          active: row.active === 1,
+        }),
+      ),
+    );
+  }
+
   public getAccount(ownerId: string, accountId: string): Promise<Account | null> {
     const row = this.database
       .prepare("SELECT * FROM accounts WHERE owner_id = ? AND account_id = ?")
@@ -151,7 +174,20 @@ export class SqliteReferenceRepository implements ReferenceRepository {
 
   public saveCategory(category: Category): Promise<void> {
     const parsed = CategorySchema.parse(category);
-    this.assertIdOwner("categories", "category_id", parsed.categoryId, parsed.ownerId);
+    // key 才是分類在一個帳本裡的邏輯身分（categories 有 UNIQUE (owner_id, key)），
+    // category_id 只是不透明識別碼，而且同一個分類在不同安裝裡的 id 並不相同：由 M1
+    // 升級上來的帳本留著 migration 建的舊 id，全新安裝則是 bootstrap 自己組的。
+    // 只看 category_id 判斷衝突的話，bootstrap 在升級過的帳本上會撞 UNIQUE 而讓整個
+    // 啟動失敗。既有的 key 一律沿用它自己的 id。
+    //
+    // 契約：傳入的 categoryId 只在「這個 key 還不存在」時才被採用。若 key 已屬於另一列，
+    // 寫入的是那一列，呼叫端傳的 id 會被忽略且沒有回傳值可察覺——目前沒有呼叫端依賴
+    // 「寫完之後用自己傳的 id 查得到」，要新增這種用法的話請改用 findCategoryByKey。
+    const existing = this.database
+      .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
+      .get(parsed.ownerId, parsed.key) as { category_id: string } | undefined;
+    const categoryId = existing?.category_id ?? parsed.categoryId;
+    this.assertIdOwner("categories", "category_id", categoryId, parsed.ownerId);
     this.database
       .prepare(
         `INSERT INTO categories (
@@ -168,7 +204,7 @@ export class SqliteReferenceRepository implements ReferenceRepository {
         WHERE categories.owner_id = excluded.owner_id`,
       )
       .run(
-        parsed.categoryId,
+        categoryId,
         parsed.ownerId,
         parsed.key,
         parsed.name,

@@ -58,4 +58,73 @@ describe("completeDraft", () => {
 
     expect(result.kind).toBe("incomplete");
   });
+
+  it("fills the counterparty into every advance allocation that lacks one", () => {
+    const draft = IncompleteDraftSchema.parse({
+      ...incompleteLunchDraft(),
+      pendingFields: [{ field: "counterparty", candidateIds: [], proposedName: "小明" }],
+      partial: {
+        occurredDate: "2026-09-24",
+        rawSegment: "聚餐 1260，小明欠一半",
+        allocations: [
+          {
+            allocationId: "mine",
+            fundsEffect: "outflow",
+            purpose: "expense",
+            amount: { amount: "630", currency: "TWD" },
+            category: "餐飲",
+          },
+          {
+            allocationId: "theirs",
+            fundsEffect: "outflow",
+            purpose: "advance",
+            amount: { amount: "630", currency: "TWD" },
+            category: "餐飲",
+          },
+        ],
+      },
+    });
+
+    const result = completeDraft(draft, { counterpartyId: "counterparty-1" });
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.allocations[1]?.counterpartyId).toBe("counterparty-1");
+    expect(result.draft.allocations[0]?.counterpartyId).toBeUndefined();
+  });
+
+  it("sets the advance share and rebalances the personal share", () => {
+    const draft = IncompleteDraftSchema.parse({
+      ...incompleteLunchDraft(),
+      pendingFields: [{ field: "advanceShare", candidateIds: [] }],
+      partial: {
+        occurredDate: "2026-09-24",
+        rawSegment: "聚餐 1000，三個人平分",
+        allocations: [
+          {
+            allocationId: "mine",
+            fundsEffect: "outflow",
+            purpose: "expense",
+            amount: { amount: "1000", currency: "TWD" },
+            category: "餐飲",
+          },
+          {
+            allocationId: "theirs",
+            fundsEffect: "outflow",
+            purpose: "advance",
+            category: "餐飲",
+            counterpartyId: "counterparty-1",
+          },
+        ],
+      },
+    });
+
+    const result = completeDraft(draft, { advanceShare: money("667", "TWD") });
+
+    expect(result.kind).toBe("draft");
+    if (result.kind !== "draft") return;
+    expect(result.draft.amount.amount).toBe("1000");
+    expect(result.draft.allocations[0]?.amount.amount).toBe("333");
+    expect(result.draft.allocations[1]?.amount.amount).toBe("667");
+  });
 });

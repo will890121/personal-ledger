@@ -65,14 +65,21 @@ describe("runtime composition", () => {
 
       await expect(runtime.repository.getDraft("draft-1")).resolves.toEqual(draft);
       await expect(
-        runtime.referenceRepository.findCategoryByKey("123", "expense_dining_lunch"),
-      ).resolves.toMatchObject({ name: "午餐" });
+        runtime.referenceRepository.findCategoryByKey("123", "expense_dining"),
+      ).resolves.toMatchObject({ name: "餐飲" });
       await expect(
         runtime.referenceRepository.findAccountByName("123", "現金"),
       ).resolves.toHaveLength(1);
       expect(
         runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ).toEqual([
+        { version: 1 },
+        { version: 2 },
+        { version: 3 },
+        { version: 4 },
+        { version: 5 },
+        { version: 6 },
+      ]);
     } finally {
       runtime.close();
     }
@@ -110,7 +117,14 @@ describe("runtime composition", () => {
       });
       expect(
         runtime.database.prepare("SELECT version FROM schema_migrations ORDER BY version").all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ).toEqual([
+        { version: 1 },
+        { version: 2 },
+        { version: 3 },
+        { version: 4 },
+        { version: 5 },
+        { version: 6 },
+      ]);
       categoryCount = (
         runtime.database
           .prepare("SELECT COUNT(*) AS count FROM categories WHERE owner_id = ?")

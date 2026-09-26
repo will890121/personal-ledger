@@ -12,7 +12,13 @@ export type CallbackAction =
   | { readonly kind: "apply-amount"; readonly draftRef: string; readonly amount: string }
   | { readonly kind: "pending-page"; readonly status: "input" | "confirm"; readonly page: number }
   | { readonly kind: "pending-open"; readonly draftRef: string }
-  | { readonly kind: "archive"; readonly draftRef: string };
+  | { readonly kind: "archive"; readonly draftRef: string }
+  | { readonly kind: "create-counterparty"; readonly draftRef: string }
+  // 預覽的取消鍵沿用舊的 `cancel:<draftId>`，而 draftId 是 UUID。追問訊息手上只有 8 碼
+  // draftRef，也不該把 UUID 塞進 callback_data，因此另立一個以 draftRef 為鍵的取消動作。
+  | { readonly kind: "cancel"; readonly draftRef: string }
+  | { readonly kind: "advance-recover"; readonly ref: string }
+  | { readonly kind: "advance-abandon"; readonly ref: string };
 
 const fieldCodes: Record<ParseField, string> = {
   amount: "amt",
@@ -20,6 +26,8 @@ const fieldCodes: Record<ParseField, string> = {
   account: "acc",
   refundTarget: "ref",
   purpose: "pur",
+  counterparty: "cpy",
+  advanceShare: "shr",
 };
 const fieldsByCode = new Map<string, ParseField>(
   Object.entries(fieldCodes).map(([field, code]) => [code, field as ParseField]),
@@ -48,6 +56,14 @@ export function encodeCallback(action: CallbackAction): string {
       return guard(`o:${action.draftRef}`);
     case "archive":
       return guard(`z:${action.draftRef}`);
+    case "create-counterparty":
+      return guard(`c:${action.draftRef}`);
+    case "cancel":
+      return guard(`x:${action.draftRef}`);
+    case "advance-recover":
+      return guard(`ar:${action.ref}`);
+    case "advance-abandon":
+      return guard(`aa:${action.ref}`);
   }
 }
 
@@ -58,6 +74,10 @@ export function decodeCallback(data: string): CallbackAction | null {
     const field = fieldsByCode.get(second);
     if (!REF_PATTERN.test(first) || !field || !INDEX_PATTERN.test(third)) return null;
     return { kind: "answer", draftRef: first, field, index: Number(third) };
+  }
+  if (prefix === "x" && first !== undefined) {
+    if (!REF_PATTERN.test(first)) return null;
+    return { kind: "cancel", draftRef: first };
   }
   if (prefix === "v" && first !== undefined && second !== undefined) {
     if (!REF_PATTERN.test(first) || !AMOUNT_PATTERN.test(second)) return null;
@@ -74,6 +94,16 @@ export function decodeCallback(data: string): CallbackAction | null {
   if (prefix === "z" && first !== undefined) {
     if (!REF_PATTERN.test(first)) return null;
     return { kind: "archive", draftRef: first };
+  }
+  if (prefix === "c" && first !== undefined) {
+    if (!REF_PATTERN.test(first)) return null;
+    return { kind: "create-counterparty", draftRef: first };
+  }
+  if ((prefix === "ar" || prefix === "aa") && first !== undefined) {
+    if (!REF_PATTERN.test(first)) return null;
+    return prefix === "ar"
+      ? { kind: "advance-recover", ref: first }
+      : { kind: "advance-abandon", ref: first };
   }
   return null;
 }

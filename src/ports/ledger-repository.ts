@@ -1,3 +1,4 @@
+import type { AdvanceRow, RecoveryRow } from "../domain/advance.js";
 import type { IncompleteDraft } from "../domain/draft.js";
 import type { ConfirmedTransaction, TransactionDraft } from "../domain/ledger.js";
 
@@ -141,4 +142,7 @@ export interface LedgerRepository {
   unlinkTransaction(command: UnlinkTransactionCommand): Promise<void>;
   listAuditEvents(ownerId: string, transactionId: string): Promise<AuditEvent[]>;
   listRecent(ownerId: string, limit: number): Promise<ConfirmedTransaction[]>;
+  listAdvanceRows(ownerId: string): Promise<AdvanceRow[]>;
+  listRecoveryRows(ownerId: string): Promise<RecoveryRow[]>;
+  countRecoveriesForTransaction(ownerId: string, transactionId: string): Promise<number>;
 }

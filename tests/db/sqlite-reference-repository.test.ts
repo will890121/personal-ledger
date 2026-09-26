@@ -104,4 +104,16 @@ describe("SqliteReferenceRepository", () => {
     expect(second.tagId).toBe(first.tagId);
     expect(second.normalizedName).toBe("trip");
   });
+
+  it("lists active counterparties", async () => {
+    await repository.upsertCounterparty({
+      referenceId: "counterparty-1",
+      ownerId: "owner-1",
+      name: "小明",
+    });
+
+    const counterparties = await repository.listActiveCounterparties("owner-1");
+
+    expect(counterparties.map((item) => item.name)).toEqual(["小明"]);
+  });
 });

@@ -185,6 +185,13 @@ export function registerPendingHandlers(bot: Bot, dependencies: LedgerBotDepende
       return;
     }
 
+    // 這條路由只掛在 /^[opz]:/，代墊相關的動作不會實際流到這裡；
+    // 純粹是縮窄型別，讓下面存取 action.draftRef 是安全的。
+    if (action.kind === "advance-recover" || action.kind === "advance-abandon") {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+
     const record = await dependencies.repository.getDraftRecord({
       ownerId: dependencies.ownerId,
       draftRef: action.draftRef,

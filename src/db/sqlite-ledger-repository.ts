@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import type { AdvanceRow, RecoveryRow } from "../domain/advance.js";
 import { IncompleteDraftSchema, type IncompleteDraft } from "../domain/draft.js";
 import {
   ConfirmedTransactionSchema,
@@ -52,6 +53,16 @@ interface EventRow {
   source_ref: string;
   raw_text: string;
 }
+interface AdvanceRowRecord {
+  allocation_id: string;
+  transaction_id: string;
+  occurred_date: string;
+  counterparty_id: string | null;
+  category_id: string | null;
+  category_snapshot: string;
+  subcategory_snapshot: string | null;
+  amount: string;
+}
 interface TransactionRow {
   transaction_id: string;
   draft_id: string;
@@ -87,6 +98,7 @@ interface AllocationRow {
   subcategory_snapshot: string | null;
   counterparty_id: string | null;
   note: string | null;
+  recovers_allocation_id: string | null;
 }
 interface AuditRow {
   audit_event_id: string;
@@ -445,6 +457,12 @@ export class SqliteLedgerRepository implements LedgerRepository {
 
   public updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
+      // 配置採「先全刪再重建」的方式更新，但 allocations.recovers_allocation_id 是指向
+      // allocations 自身的外鍵（migration 0005），回收配置會指著被刪除的代墊配置。
+      // defer_foreign_keys 可以在交易內設定（與 foreign_keys 不同），把外鍵檢查延到 COMMIT
+      // 才做，讓「刪除後立即以相同 allocation_id 重建」成立，最終狀態的完整性仍然被檢查。
+      // 這個 pragma 會在每次 COMMIT／ROLLBACK 後自動重設，不會外溢到其他操作。
+      this.database.pragma("defer_foreign_keys = ON");
       const before = this.requireMutable(command.ownerId, command.transactionId);
       if (before.updatedAt !== command.expectedUpdatedAt)
         throw new Error("stale transaction update");
@@ -514,6 +532,17 @@ export class SqliteLedgerRepository implements LedgerRepository {
       const before = this.requireMutable(command.ownerId, command.transactionId);
       if (before.updatedAt !== command.expectedUpdatedAt)
         throw new Error("stale transaction update");
+      const recoveries = this.database
+        .prepare(
+          `SELECT count(*) AS total
+         FROM allocations r
+         JOIN transactions rt ON rt.transaction_id = r.transaction_id
+         WHERE rt.status = 'confirmed' AND r.recovers_allocation_id IN (
+           SELECT allocation_id FROM allocations WHERE transaction_id = ?
+         )`,
+        )
+        .get(command.transactionId) as { total: number };
+      if (recoveries.total > 0) throw new Error("advance still has recoveries");
       const result = this.database
         .prepare(
           "UPDATE transactions SET status = 'deleted', updated_at = ?, deleted_at = ? WHERE transaction_id = ? AND owner_id = ? AND status = 'confirmed' AND updated_at = ?",
@@ -642,6 +671,64 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return Promise.resolve(rows.map((row) => this.toConfirmedTransaction(row)));
   }
 
+  public listAdvanceRows(ownerId: string): Promise<AdvanceRow[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT a.allocation_id, a.transaction_id, t.occurred_date, a.counterparty_id,
+          a.category_id, a.category_snapshot, a.subcategory_snapshot, a.amount
+       FROM allocations a
+       JOIN transactions t ON t.transaction_id = a.transaction_id
+       WHERE t.owner_id = ? AND t.status = 'confirmed' AND a.purpose = 'advance'
+       ORDER BY t.occurred_date, a.rowid`,
+      )
+      .all(ownerId) as AdvanceRowRecord[];
+    return Promise.resolve(
+      rows.map((row) => ({
+        allocationId: row.allocation_id,
+        transactionId: row.transaction_id,
+        occurredDate: row.occurred_date,
+        counterpartyId: row.counterparty_id ?? "",
+        ...(row.category_id ? { categoryId: row.category_id } : {}),
+        category: row.category_snapshot,
+        ...(row.subcategory_snapshot ? { subcategory: row.subcategory_snapshot } : {}),
+        amount: row.amount,
+      })),
+    );
+  }
+
+  public listRecoveryRows(ownerId: string): Promise<RecoveryRow[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT a.recovers_allocation_id, a.amount
+       FROM allocations a
+       JOIN transactions t ON t.transaction_id = a.transaction_id
+       WHERE t.owner_id = ? AND t.status = 'confirmed'
+         AND a.purpose = 'advance_recovery' AND a.recovers_allocation_id IS NOT NULL`,
+      )
+      .all(ownerId) as { recovers_allocation_id: string; amount: string }[];
+    return Promise.resolve(
+      rows.map((row) => ({
+        recoversAllocationId: row.recovers_allocation_id,
+        amount: row.amount,
+      })),
+    );
+  }
+
+  public countRecoveriesForTransaction(ownerId: string, transactionId: string): Promise<number> {
+    const row = this.database
+      .prepare(
+        `SELECT count(*) AS total
+       FROM allocations r
+       JOIN transactions rt ON rt.transaction_id = r.transaction_id
+       WHERE rt.owner_id = ? AND rt.status = 'confirmed'
+         AND r.recovers_allocation_id IN (
+           SELECT allocation_id FROM allocations WHERE transaction_id = ?
+         )`,
+      )
+      .get(ownerId, transactionId) as { total: number };
+    return Promise.resolve(row.total);
+  }
+
   private getDraftSync(draftId: string): TransactionDraft | null {
     const row = this.database
       .prepare("SELECT draft_json FROM drafts WHERE draft_id = ?")
@@ -672,7 +759,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
     allocations: readonly Allocation[],
   ): void {
     const insert = this.database.prepare(
-      "INSERT INTO allocations (allocation_id, transaction_id, funds_effect, purpose, amount, currency, category_id, category_snapshot, subcategory_snapshot, counterparty_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO allocations (allocation_id, transaction_id, funds_effect, purpose, amount, currency, category_id, category_snapshot, subcategory_snapshot, counterparty_id, note, recovers_allocation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (const item of allocations) {
       const categoryId =
@@ -689,6 +776,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
         item.subcategory ?? null,
         item.counterpartyId ?? null,
         item.note ?? null,
+        item.recoversAllocationId ?? null,
       );
     }
   }
@@ -730,14 +818,24 @@ export class SqliteLedgerRepository implements LedgerRepository {
         "INSERT OR IGNORE INTO categories (category_id, owner_id, key, name, kind, depth) VALUES (?, ?, 'expense', '支出', 'expense', 1)",
       )
       .run(rootId, ownerId);
-    const lunch =
+    const dining =
       ["food", "餐飲"].includes(category) &&
       subcategory !== undefined &&
       ["meal", "午餐"].includes(subcategory);
     const suffix = Buffer.from(`${category}\u0000${subcategory ?? ""}`)
       .toString("hex")
       .toLowerCase();
-    const id = lunch ? `m2:${ownerId}:expense_dining_lunch` : `legacy:${ownerId}:${suffix}`;
+    const key = dining ? "expense_dining" : `legacy_${suffix}`;
+    // 必須先按 key 查：categories 有 UNIQUE (owner_id, key)，而同一個餐飲分類在不同
+    // 安裝裡的 category_id 並不相同——由 M1 升級上來的帳本留著舊 id
+    // 'm2:<owner>:expense_dining_lunch'（見 0006 的說明），全新安裝則是 bootstrap 種的
+    // 'm2:<owner>:expense_dining'。直接組 id 再 INSERT OR IGNORE 會被 UNIQUE 靜靜吃掉，
+    // 然後回傳一個不存在的 id，緊接著的 allocation 寫入就會踩到外鍵。
+    const existing = this.database
+      .prepare("SELECT category_id FROM categories WHERE owner_id = ? AND key = ?")
+      .get(ownerId, key) as { category_id: string } | undefined;
+    if (existing) return existing.category_id;
+    const id = dining ? `m2:${ownerId}:expense_dining` : `legacy:${ownerId}:${suffix}`;
     this.database
       .prepare(
         "INSERT OR IGNORE INTO categories (category_id, owner_id, key, name, kind, parent_id, depth) VALUES (?, ?, ?, ?, 'expense', ?, 2)",
@@ -745,8 +843,8 @@ export class SqliteLedgerRepository implements LedgerRepository {
       .run(
         id,
         ownerId,
-        lunch ? "expense_dining_lunch" : `legacy_${suffix}`,
-        subcategory ? `${category}／${subcategory}` : category,
+        key,
+        dining ? "餐飲" : subcategory ? `${category}／${subcategory}` : category,
         rootId,
       );
     return id;
@@ -779,6 +877,9 @@ export class SqliteLedgerRepository implements LedgerRepository {
         ...(item.subcategory_snapshot ? { subcategory: item.subcategory_snapshot } : {}),
         ...(item.counterparty_id ? { counterpartyId: item.counterparty_id } : {}),
         ...(item.note ? { note: item.note } : {}),
+        ...(item.recovers_allocation_id
+          ? { recoversAllocationId: item.recovers_allocation_id }
+          : {}),
       })),
       ...(row.account_from_id ? { accountFromId: row.account_from_id } : {}),
       ...(row.account_to_id ? { accountToId: row.account_to_id } : {}),

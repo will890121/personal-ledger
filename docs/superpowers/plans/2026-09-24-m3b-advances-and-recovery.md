@@ -131,12 +131,20 @@ describe("parseShare", () => {
     });
   });
 
-  it("reads a three way split with two names", () => {
+  it("reads a three way split and leaves unparseable names to the follow-up", () => {
+    // 逗號列舉的名字不在四種明確寫法之內，因此 names 為空，由應用層追問。
     expect(parseShare("聚餐 1260，小明，小華，三個人平分", "1260")).toEqual({
       kind: "split",
       participants: 3,
-      names: ["小明", "小華"],
+      names: [],
       share: "420",
+    });
+  });
+
+  it("only takes names from the four explicit forms", () => {
+    expect(parseShare("聚餐 1260，現金支付，三個人平分", "1260")).toMatchObject({ names: [] });
+    expect(parseShare("聚餐 1260，幫小明付，三個人平分", "1260")).toMatchObject({
+      names: ["小明"],
     });
   });
 
@@ -251,6 +259,8 @@ export function parseShare(text: string, total: string): ShareResult {
 ```
 
 名字抽取只認 `X欠`、`X要還`、`X該給`、`幫X付` 這四種明確寫法。抽不到名字時 `names` 為空陣列，由應用層追問——解析器不猜測誰是誰。
+
+**不得為了讓多人平分的測試通過而擴大抽取範圍。** 逗號列舉（`小明，小華，三個人平分`）不在四種寫法之內：任何「把逗號分隔的詞當人名」的規則都會把 `現金支付`、`小明先走了` 這類片語收進 `names`，讓應用層誤以為已經取得分帳對象而不再追問。設計 §5.3 明定「名字數量少於 N−1 就追問」，空陣列是完全受支援的路徑。
 
 - [ ] **Step 4：執行測試確認通過**
 
@@ -830,15 +840,19 @@ describe("migration 0005", () => {
 
 ```ts
 it("round-trips the recovery reference on an allocation", async () => {
-  const { repository } = await setupConfirmedAdvance();
+  const { repository, recoveryTransactionId } = await setupConfirmedAdvance();
 
-  const transaction = await repository.getTransaction("owner-1", "recovery-transaction");
+  const transaction = await repository.getTransaction("owner-1", recoveryTransactionId);
 
   expect(transaction?.allocations[0]?.recoversAllocationId).toBe("advance-allocation");
 });
 ```
 
-`setupConfirmedAdvance` 建立一筆含代墊配置的已確認交易，再確認一筆帶 `recoversAllocationId` 的回收草稿。
+`setupConfirmedAdvance` 建立一筆含代墊配置的已確認交易，再確認一筆帶 `recoversAllocationId` 的回收草稿，並回傳 `{ repository, recoveryTransactionId }`。
+
+`confirmDraft` 的 `transaction_id` 一律由 `randomUUID()` 產生，沒有指定字面值的管道，因此測試必須使用實際回傳的 ID。**不要為了測試在 `confirmDraft` 開可注入 ID 的後門**，也不要繞過 repository 直接寫 SQL——後者會讓這個測試失去意義（它要驗證的正是 `replaceAllocations` 的寫入與讀取）。
+
+代墊配置必須有 `counterpartyId`（Task 2 的不變條件），而該欄位是外鍵，因此 `setupConfirmedAdvance` 需要先插入一列 `counterparties`。
 
 - [ ] **Step 2：執行測試確認失敗**
 
@@ -947,7 +961,9 @@ describe("advance queries", () => {
   it("refuses to delete an advance transaction that still has recoveries", async () => {
     const { repository, command } = await setupAdvanceLedgerWithRecovery("300");
 
-    await expect(repository.softDeleteTransaction(command)).rejects.toThrow(
+    // better-sqlite3 是同步的，execute.immediate() 在 Promise.resolve() 包裝之前就拋錯，
+    // 因此要用同步斷言。既有測試對 softDeleteTransaction 的其他保護也是這樣寫。
+    expect(() => repository.softDeleteTransaction(command)).toThrow(
       "advance still has recoveries",
     );
   });
@@ -1150,7 +1166,36 @@ git commit -m "feat: expose counterparties in the reference snapshot"
 **Files:**
 
 - Modify: `src/domain/draft.ts`、`src/application/answer-draft.ts`
+- Modify: `src/telegram/callback-data.ts`、`src/telegram/format-prompt.ts`（僅補窮盡對應表，見下方說明）
 - Test: `tests/domain/draft.test.ts`、`tests/application/answer-draft.test.ts`
+
+**為什麼要動兩個 telegram 檔案：** `ParseField` 有兩處窮盡對應表——`callback-data.ts` 的 `fieldCodes: Record<ParseField, string>` 與 `format-prompt.ts` 的 `fieldLabels`。新增 enum 值卻不補這兩張表，typecheck、lint 與 build 會立刻失敗，分支在後續任務期間一直是紅的。本任務只補最小條目讓專案保持綠燈，**追問訊息的行為留給 Task 9**：
+
+```ts
+// src/telegram/callback-data.ts
+const fieldCodes: Record<ParseField, string> = {
+  amount: "amt",
+  category: "cat",
+  account: "acc",
+  refundTarget: "ref",
+  purpose: "pur",
+  counterparty: "cpy",
+  advanceShare: "shr",
+};
+```
+
+```ts
+// src/telegram/format-prompt.ts
+const fieldLabels = {
+  amount: "金額",
+  category: "分類",
+  account: "帳戶",
+  refundTarget: "退款原交易",
+  purpose: "用途",
+  counterparty: "交易對象",
+  advanceShare: "代墊金額",
+} as const;
+```
 
 **Interfaces:**
 
@@ -1324,8 +1369,48 @@ Expected: PASS。
 
 - [ ] **Step 5：提交**
 
+在 `tests/application/answer-draft.test.ts` 追加兩個測試，覆蓋 `patchFor` 的新分派：
+
+```ts
+it("routes a counterparty answer to the counterparty patch", async () => {
+  const { repository, dependencies } = await seedIncompleteAdvanceDraft();
+
+  const result = await answerDraft(
+    {
+      ...amountAnswer,
+      field: "counterparty",
+      value: { kind: "reference", id: "counterparty-1", label: "小明" },
+      rawText: "小明",
+    },
+    dependencies,
+  );
+
+  expect(result.kind).toBe("draft");
+  const record = await repository.getDraftRecord({ draftId: "draft-1" });
+  expect(record?.draft?.allocations[1]?.counterpartyId).toBe("counterparty-1");
+});
+
+it("rejects a non-numeric advance share", async () => {
+  const { dependencies } = await seedIncompleteAdvanceDraft();
+
+  const result = await answerDraft(
+    {
+      ...amountAnswer,
+      field: "advanceShare",
+      value: { kind: "amount", text: "一半" },
+      rawText: "一半",
+    },
+    dependencies,
+  );
+
+  expect(result).toEqual({ kind: "invalid", reason: "amount_not_numeric" });
+});
+```
+
+`seedIncompleteAdvanceDraft` 比照既有的 `seedIncompleteLunchDraft`，建立一筆含個人支出與代墊兩個配置、待補欄位為 counterparty 的不完整草稿。
+
 ```bash
-git add src/domain/draft.ts src/application/answer-draft.ts tests/domain/draft.test.ts tests/application/answer-draft.test.ts
+git add src/domain/draft.ts src/application/answer-draft.ts src/telegram/callback-data.ts src/telegram/format-prompt.ts tests/domain/draft.test.ts tests/application/answer-draft.test.ts
 git commit -m "feat: support counterparty and advance share follow-ups"
 ```
 
@@ -1444,7 +1529,56 @@ Expected: FAIL，代墊配置沒有產生。
 
 - [ ] **Step 3：實作**
 
-在 `parseTransaction` 的支出草稿路徑（`expenseShell` 取得非空 shell 之後、回傳 `draft(...)` 之前）插入分帳處理：
+**不等額分帳必須在 `amounts.length !== 1` 關卡之前處理。** `午餐 1260，小明欠 630` 有兩個數字，會被 M1 起就存在的金額關卡攔下，因此 `explicit` 分支在關卡之後永遠不可達。條件嚴格限縮為「數字總數 = 明確金額數量 + 1」，其餘情形不接手：
+
+```ts
+  // 不等額分帳是唯一能表達「每人負擔不同」的輸入方式，必須在金額關卡之前攔截。
+  // 條件嚴格限縮：只有數字數量剛好等於「總額 + 每筆明確代墊」時才接手，
+  // 「午餐 120 另加 30」這類仍然交回既有關卡處理。
+  const explicitShare = parseShare(text, amounts[0]?.value ?? "0");
+  if (
+    explicitShare.kind === "explicit" &&
+    amounts.length === explicitShare.shares.length + 1
+  ) {
+    const total = money(amounts[0]?.value ?? "", "TWD");
+    const shell = expenseShell(context, text, accounts[0], merchants[0], total)[0];
+    if (!shell) return incomplete(context, text, ["category"]);
+
+    const advances = explicitShare.shares.map((item, index) => ({
+      ...shell,
+      allocationId:
+        context.advanceAllocationIds?.[index] ?? `${context.allocationId}-advance-${String(index)}`,
+      purpose: "advance" as const,
+      amount: money(item.amount, "TWD"),
+      ...(matchingReferences(item.name, context.counterparties ?? [])[0]
+        ? {
+            counterpartyId: matchingReferences(item.name, context.counterparties ?? [])[0]
+              ?.counterpartyId,
+          }
+        : {}),
+    }));
+    const advanceTotal = advances.reduce(
+      (sum, item) => sum.plus(item.amount.amount),
+      new Decimal(0),
+    );
+    const personal = new Decimal(total.amount).minus(advanceTotal);
+
+    // 代墊合計超過總額：語句自相矛盾，改為追問代墊金額。
+    if (personal.isNegative()) return incomplete(context, text, ["advanceShare"]);
+
+    // 個人負擔為 0 代表整筆都是代墊，不產生金額為 0 的配置（違反金額必須為正）。
+    const allocations = personal.greaterThan(0)
+      ? [{ ...shell, amount: money(personal.toString(), "TWD") }, ...advances]
+      : advances;
+
+    if (advances.some((item) => !item.counterpartyId)) {
+      return incomplete(context, text, ["counterparty"], { allocations });
+    }
+    return draft(context, text, allocations as Allocation[], {});
+  }
+```
+
+在 `parseTransaction` 的支出草稿路徑（`expenseShell` 取得非空 shell 之後、回傳 `draft(...)` 之前）插入平分與除不盡的處理：
 
 ```ts
   const share = parseShare(text, amount.amount);
@@ -1453,11 +1587,25 @@ Expected: FAIL，代墊配置沒有產生。
     if (!shell) return incomplete(context, text, ["category"], { ...references });
 
     if (share.kind === "not_divisible") {
+      // 依人數產生 N−1 筆代墊 placeholder。只產生一筆會讓「三個人平分」補完金額後
+      // 少算一個人的欠款，個人負擔也隨之多算——而且不會有任何測試抓到。
+      const placeholders = Array.from({ length: share.participants - 1 }, (_, index) => ({
+        ...shell,
+        allocationId:
+          context.advanceAllocationIds?.[index] ??
+          `${context.allocationId}-advance-${String(index)}`,
+        purpose: "advance" as const,
+        ...(matchingReferences(share.names[index] ?? "", context.counterparties ?? [])[0]
+          ? {
+              counterpartyId: matchingReferences(
+                share.names[index] ?? "",
+                context.counterparties ?? [],
+              )[0]?.counterpartyId,
+            }
+          : {}),
+      }));
       return incomplete(context, text, ["advanceShare"], {
-        allocations: [
-          { ...shell, amount },
-          { ...shell, allocationId: context.advanceAllocationIds?.[0] ?? `${context.allocationId}-advance`, purpose: "advance" },
-        ],
+        allocations: [{ ...shell, amount }, ...placeholders],
         ...references,
       });
     }
@@ -1631,7 +1779,9 @@ Expected: FAIL，追問訊息沒有交易對象欄位。
 
 `handlers/drafts.ts` 的文字回覆路徑依待補欄位分派：`amount` 與 `advanceShare` 視為金額；`counterparty` 則把輸入文字當成 `proposedName` 寫回草稿並重發追問。`c:` callback 呼叫 `upsertCounterparty` 後，以新建立的 ID 呼叫 `applyAnswer`。
 
-`create-batch.ts` 與 `answer-draft.ts` 的依賴需要能取得 `referenceRepository`，`answerDraft` 的 `AnswerDraftDependencies` 新增 `referenceRepository`。
+`create-batch.ts` 的 `candidatesFor` 需補上 `counterparty` 分支（候選為啟用中的交易對象），否則候選按鈕無法產生。
+
+**`answerDraft` 不需要 `referenceRepository`。** 建立交易對象是在 `drafts.ts` 的 `create-counterparty` callback 裡完成的：先 `upsertCounterparty` 取得 ID，再把該 ID 當成一般的 reference 答案傳給 `applyAnswer`。讓應用層的 `answerDraft` 認識參照儲存庫只會多一條無人使用的依賴。
 
 - [ ] **Step 4：執行測試確認通過**
 
@@ -2439,7 +2589,11 @@ Expected: FAIL，`小明還 300` 會被當成一般支出解析。
 - [ ] **Step 3：實作**
 
 ```ts
-const REPAYMENT_PATTERN = /^(?:收到\s*)?(.+?)\s*(?:還|還我|歸還)\s*([0-9]+(?:\.[0-9]+)?)$/;
+// 兩種寫法各自錨定整串：`小明還 300`（含還字）與 `收到小明 300`（收到前綴、不需還字）。
+const REPAYMENT_PATTERNS = [
+  /^(.+?)\s*(?:還我|歸還|還)\s*([0-9]+(?:\.[0-9]+)?)$/,
+  /^收到\s*(.+?)\s*([0-9]+(?:\.[0-9]+)?)$/,
+];
 
 export function parseRepayment(
   text: string,
