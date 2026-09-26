@@ -48,4 +48,14 @@ describe("callback data", () => {
     expect(decodeCallback("v:a7b2c9e4:abc")).toBeNull();
     expect(decodeCallback("")).toBeNull();
   });
+  it("round-trips a cancel action keyed by draft ref", () => {
+    // 預覽用的是舊的 `cancel:<draftId>`，而 draftId 是 UUID；追問訊息手上只有 8 碼
+    // draftRef，也不該把 UUID 塞進 callback_data。
+    const data = encodeCallback({ kind: "cancel", draftRef: "a7b2c9e4" });
+
+    expect(data).toBe("x:a7b2c9e4");
+    expect(Buffer.byteLength(data, "utf8")).toBeLessThanOrEqual(CALLBACK_DATA_LIMIT);
+    expect(decodeCallback(data)).toEqual({ kind: "cancel", draftRef: "a7b2c9e4" });
+    expect(decodeCallback("x:not-hex")).toBeNull();
+  });
 });

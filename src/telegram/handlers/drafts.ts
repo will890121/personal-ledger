@@ -240,6 +240,35 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     );
   });
 
+  // 追問訊息上的取消鍵。預覽用的是舊的 `cancel:<draftId>`（draftId 是 UUID），追問手上
+  // 只有 8 碼 draftRef，因此走 `x:<draftRef>` 這條。
+  bot.callbackQuery(/^x:/, async (context) => {
+    const action = decodeCallback(context.callbackQuery.data);
+    if (action?.kind !== "cancel") {
+      await context.answerCallbackQuery({ text: "操作已失效" });
+      return;
+    }
+    const record = await dependencies.repository.getDraftRecord({
+      ownerId: dependencies.ownerId,
+      draftRef: action.draftRef,
+    });
+    if (!record) {
+      await context.answerCallbackQuery({ text: "草稿不存在或已處理" });
+      return;
+    }
+    // 追問中的草稿是 IncompleteDraft，cancelDraft 會以 TransactionDraftSchema 解析既有
+    // JSON，對它必定丟「draft not found」。放棄一筆未完成草稿在 M3a 已經定義為封存
+    // （/pending 的「封存」鍵走的就是這條），這裡沿用同一個操作，不另立一個語意重複的
+    // 狀態；對使用者而言兩者都是「這筆不再出現在待處理清單」。
+    if (record.incomplete) {
+      await dependencies.repository.archiveDraft(record.draftId);
+    } else {
+      await cancelDraft(dependencies.repository, record.draftId);
+    }
+    await context.answerCallbackQuery({ text: "已取消" });
+    await context.editMessageText("草稿已取消。");
+  });
+
   bot.callbackQuery(/^cancel:/, async (context) => {
     const draftId = context.callbackQuery.data.slice("cancel:".length);
     await cancelDraft(dependencies.repository, draftId);

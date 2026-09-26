@@ -14,6 +14,9 @@ export type CallbackAction =
   | { readonly kind: "pending-open"; readonly draftRef: string }
   | { readonly kind: "archive"; readonly draftRef: string }
   | { readonly kind: "create-counterparty"; readonly draftRef: string }
+  // 預覽的取消鍵沿用舊的 `cancel:<draftId>`，而 draftId 是 UUID。追問訊息手上只有 8 碼
+  // draftRef，也不該把 UUID 塞進 callback_data，因此另立一個以 draftRef 為鍵的取消動作。
+  | { readonly kind: "cancel"; readonly draftRef: string }
   | { readonly kind: "advance-recover"; readonly ref: string }
   | { readonly kind: "advance-abandon"; readonly ref: string };
 
@@ -55,6 +58,8 @@ export function encodeCallback(action: CallbackAction): string {
       return guard(`z:${action.draftRef}`);
     case "create-counterparty":
       return guard(`c:${action.draftRef}`);
+    case "cancel":
+      return guard(`x:${action.draftRef}`);
     case "advance-recover":
       return guard(`ar:${action.ref}`);
     case "advance-abandon":
@@ -69,6 +74,10 @@ export function decodeCallback(data: string): CallbackAction | null {
     const field = fieldsByCode.get(second);
     if (!REF_PATTERN.test(first) || !field || !INDEX_PATTERN.test(third)) return null;
     return { kind: "answer", draftRef: first, field, index: Number(third) };
+  }
+  if (prefix === "x" && first !== undefined) {
+    if (!REF_PATTERN.test(first)) return null;
+    return { kind: "cancel", draftRef: first };
   }
   if (prefix === "v" && first !== undefined && second !== undefined) {
     if (!REF_PATTERN.test(first) || !AMOUNT_PATTERN.test(second)) return null;

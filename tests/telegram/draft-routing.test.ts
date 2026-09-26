@@ -129,7 +129,29 @@ describe("draft routing", () => {
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
 
     const text = getText(calls.at(-1));
-    expect(text).toContain("　　餐飲／午餐 · TWD 120");
+    expect(text).toContain("└ 餐飲／午餐 · TWD 120");
     expect(text).not.toContain("午餐／午餐");
+  });
+  it("cancels the draft from the follow-up prompt's cancel button", async () => {
+    // 分類追問只收按鈕，文字回覆會被當成金額退回；少了這條路草稿會一直停在
+    // awaiting_input，使用者得另外開 /pending 才處理得掉。
+    const { bot, calls, repository } = harness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "雜支 60" }));
+    const draftRef = firstDraftRef(repository);
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 2, data: `x:${draftRef}` }));
+
+    const record = await repository.getDraftRecord({ ownerId: "123", draftRef });
+    // 未完成草稿的「放棄」在 M3a 就定義為封存（/pending 的封存鍵同一條路）；使用者看到
+    // 的是「已取消」，重點是它不再出現在待處理清單裡。
+    expect(record?.status).toBe("archived");
+    expect(getText(calls.at(-1))).toBe("草稿已取消。");
+    const pending = await repository.listPendingDrafts({
+      ownerId: "123",
+      status: "awaiting_input",
+      limit: 10,
+      offset: 0,
+    });
+    expect(pending.map((item) => item.draftRef)).not.toContain(draftRef);
   });
 });

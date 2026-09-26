@@ -38,7 +38,9 @@ describe("formatPrompt", () => {
 
     const prompt = formatPrompt(draft, "a7b2c9e4", { categories: expenseCategories(candidates) });
 
-    expect(prompt.replyMarkup?.inline_keyboard.flat()).toHaveLength(24);
+    // 最後一列固定是取消鍵，不算候選。
+    const candidateRows = (prompt.replyMarkup?.inline_keyboard ?? []).slice(0, -1);
+    expect(candidateRows.flat()).toHaveLength(24);
   });
 
   it("offers a button for every expense category, including the ones sorted last", () => {
@@ -59,12 +61,24 @@ describe("formatPrompt", () => {
 
     const prompt = formatPrompt(draft, "a7b2c9e4", { categories });
 
-    const labels = (prompt.replyMarkup?.inline_keyboard ?? []).flatMap((row) =>
-      row.map((button) => button.text),
-    );
+    const labels = (prompt.replyMarkup?.inline_keyboard ?? [])
+      .slice(0, -1)
+      .flatMap((row) => row.map((button) => button.text));
     expect(labels).toEqual(categories.map((item) => item.name));
     expect(labels).toContain("旅遊");
     expect(labels).toContain("待分類");
+  });
+  it("always offers a way out of a candidate prompt", () => {
+    // 分類追問只收按鈕（文字回覆會被當成金額退回），少了取消鍵這則訊息就沒有出口，
+    // 草稿只能一直停在 awaiting_input，要另外開 /pending 才處理得掉。
+    const draft = incompleteDraftWithPendingCategory(["category-0", "category-1"]);
+
+    const prompt = formatPrompt(draft, "a7b2c9e4", {
+      categories: expenseCategories(["category-0", "category-1"]),
+    });
+
+    const rows = prompt.replyMarkup?.inline_keyboard ?? [];
+    expect(rows.at(-1)).toEqual([{ text: "取消", callback_data: "x:a7b2c9e4" }]);
   });
 });
 

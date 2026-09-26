@@ -69,7 +69,19 @@ describe("createLedgerBot", () => {
         },
       ),
     ).toMatchObject({
-      text: "交易 1 / 1\n日期：2026-09-19\n總金額：TWD 1015\n帳戶：台新 → 國泰\n配置 1：轉帳・轉帳 · TWD 1000\n配置 2：手續費・金融費用 · TWD 15",
+      // /recent 與預覽共用同一份配置渲染（版型 D）；先前兩邊各寫一份，使用者在同一個
+      // bot 裡會看到兩種排版。
+      text: [
+        "交易 1 / 1",
+        "日期：2026-09-19",
+        "總金額：TWD 1015",
+        "帳戶：台新 → 國泰",
+        "",
+        "內部移轉 · 轉帳",
+        "└ 轉帳 · TWD 1000",
+        "資金流出 · 手續費",
+        "└ 金融費用 · TWD 15",
+      ].join("\n"),
       replyMarkup: {
         inline_keyboard: [
           [{ text: "刪除", callback_data: "delete:transaction-1" }],

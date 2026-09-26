@@ -8,21 +8,8 @@ import { loadReferenceSnapshot } from "../../application/reference-data.js";
 import type { ReferenceSnapshot } from "../../application/reference-data.js";
 import type { ConfirmedTransaction } from "../../domain/ledger.js";
 import type { LedgerBotDependencies } from "../dependencies.js";
+import { formatAllocationLines } from "../format-allocations.js";
 import { formatPreview } from "../format-preview.js";
-
-const recentPurposeLabels: Record<ConfirmedTransaction["allocations"][number]["purpose"], string> =
-  {
-    income: "收入",
-    expense: "支出",
-    transfer: "轉帳",
-    refund: "退款",
-    advance: "代墊",
-    advance_recovery: "代墊收回",
-    loan_out: "借出",
-    loan_in: "借入",
-    loan_repayment: "還款",
-    fee: "手續費",
-  };
 
 export function formatRecentPage(
   transactions: readonly ConfirmedTransaction[],
@@ -43,12 +30,7 @@ export function formatRecentPage(
   );
   const accountTo = references.accounts?.find((item) => item.accountId === transaction.accountToId);
   const merchant = references.merchants?.find((item) => item.merchantId === transaction.merchantId);
-  const allocationLines = transaction.allocations.map((allocation, allocationIndex) => {
-    const category = allocation.subcategory
-      ? `${allocation.category}／${allocation.subcategory}`
-      : allocation.category;
-    return `配置 ${String(allocationIndex + 1)}：${recentPurposeLabels[allocation.purpose]}・${category} · ${allocation.amount.currency} ${allocation.amount.amount}`;
-  });
+  const allocationLines = formatAllocationLines(transaction.allocations, references.counterparties);
   const referenceLines = [
     ...(merchant ? [`商家：${merchant.name}`] : []),
     ...(accountFrom && accountTo
@@ -81,6 +63,8 @@ export function formatRecentPage(
       `日期：${transaction.occurredDate}`,
       `總金額：${transaction.amount.currency} ${transaction.amount.amount}`,
       ...referenceLines,
+      // 與預覽同樣以空行分隔總覽與配置區塊（版型 D）。
+      "",
       ...allocationLines,
     ].join("\n"),
     replyMarkup: {

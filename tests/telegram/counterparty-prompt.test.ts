@@ -53,7 +53,11 @@ describe("counterparty follow-up", () => {
     // 新使用者的候選清單必定是空的（§5.4）：文案必須自己指出「回覆輸入新名稱」
     // 這條路，否則這則訊息完全沒有出路。
     expect(prompt).toContain("回覆這則訊息");
-    expect(JSON.stringify(calls.at(-1)?.payload)).toContain('"inline_keyboard":[]');
+    // 沒有任何既有交易對象可選，所以不該出現候選按鈕；但仍必須有取消鍵，否則使用者
+    // 只剩「照著打一個名字」這一條路，想放棄這筆草稿就得另外開 /pending。
+    const payload = JSON.stringify(calls.at(-1)?.payload);
+    expect(payload).toContain('"inline_keyboard":[[{"text":"取消"');
+    expect(payload).toMatch(/"callback_data":"x:[0-9a-f]{8}"/);
   });
 
   it("asks to create an unknown counterparty typed as a reply", async () => {

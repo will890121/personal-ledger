@@ -130,9 +130,17 @@ export function formatPrompt(
     lines.push("請選擇：");
   }
 
+  // 候選追問只收按鈕——文字回覆會被當成金額退回（answer-draft 的 amount_not_numeric），
+  // 所以少了取消鍵這則訊息就沒有出口，草稿只能一直停在 awaiting_input，使用者得另外
+  // 開 /pending 才處理得掉。取消鍵自己佔一列，避免和分類按鈕混在一起被誤觸。
   return {
     text: lines.join("\n"),
-    replyMarkup: { inline_keyboard: rows },
+    replyMarkup: {
+      inline_keyboard: [
+        ...rows,
+        [{ text: "取消", callback_data: encodeCallback({ kind: "cancel", draftRef }) }],
+      ],
+    },
   };
 }
 

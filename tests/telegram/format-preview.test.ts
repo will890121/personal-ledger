@@ -45,13 +45,9 @@ describe("formatPreview", () => {
     const preview = formatPreview(draft);
 
     expect(preview.text).toBe(
-      [
-        "日期：2026-09-18",
-        "總金額：TWD 120",
-        "",
-        "▸ 資金流出 · 支出",
-        "　　餐飲／午餐 · TWD 120",
-      ].join("\n"),
+      ["日期：2026-09-18", "總金額：TWD 120", "", "資金流出 · 支出", "└ 餐飲／午餐 · TWD 120"].join(
+        "\n",
+      ),
     );
   });
 
@@ -104,12 +100,12 @@ describe("formatPreview", () => {
         "日期：2026-09-25",
         "總金額：TWD 1000",
         "",
-        "▸ 資金流出 · 支出",
-        "　　餐飲／午餐 · TWD 332",
-        "▸ 資金流出 · 代墊 (小明)",
-        "　　餐飲／午餐 · TWD 334",
-        "▸ 資金流出 · 代墊 (小華)",
-        "　　餐飲／午餐 · TWD 334",
+        "資金流出 · 支出",
+        "└ 餐飲／午餐 · TWD 332",
+        "資金流出 · 代墊 (小明)",
+        "└ 餐飲／午餐 · TWD 334",
+        "資金流出 · 代墊 (小華)",
+        "└ 餐飲／午餐 · TWD 334",
       ].join("\n"),
     );
   });
@@ -122,7 +118,7 @@ describe("formatPreview", () => {
       ],
     });
 
-    expect(preview.text).toContain("▸ 資金流出 · 代墊收回 (unknown-id)");
+    expect(preview.text).toContain("資金流出 · 代墊收回 (unknown-id)");
   });
 
   it("shows every allocation and the credit-card cash effect", () => {
@@ -148,8 +144,8 @@ describe("formatPreview", () => {
         },
       ],
     });
-    expect(preview.text).toContain("▸ 內部移轉 · 轉帳");
-    expect(preview.text).toContain("▸ 資金流出 · 手續費");
+    expect(preview.text).toContain("內部移轉 · 轉帳");
+    expect(preview.text).toContain("資金流出 · 手續費");
 
     const credit = formatPreview({
       ...draft,
