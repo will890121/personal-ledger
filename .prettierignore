@@ -1,3 +1,5 @@
+.claude/
+backups/
 coverage/
 data/
 dist/
