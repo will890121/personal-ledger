@@ -153,8 +153,14 @@ export interface LedgerRepository {
   ): Promise<ConfirmedTransaction>;
   cancelDraft(draftId: string): Promise<TransactionDraft>;
   getTransaction(ownerId: string, transactionId: string): Promise<ConfirmedTransaction | null>;
-  updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction>;
-  softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction>;
+  updateTransaction(
+    command: UpdateTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction>;
+  softDeleteTransaction(
+    command: DeleteTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction>;
   linkTransaction(command: LinkTransactionCommand): Promise<void>;
   unlinkTransaction(command: UnlinkTransactionCommand): Promise<void>;
   listAuditEvents(ownerId: string, transactionId: string): Promise<AuditEvent[]>;

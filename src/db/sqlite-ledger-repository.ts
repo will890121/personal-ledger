@@ -500,7 +500,10 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return Promise.resolve(this.getTransactionSync(ownerId, transactionId));
   }
 
-  public updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction> {
+  public updateTransaction(
+    command: UpdateTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
       // 配置採「先全刪再重建」的方式更新，但 allocations.recovers_allocation_id 是指向
       // allocations 自身的外鍵（migration 0005），回收配置會指著被刪除的代墊配置。
@@ -567,12 +570,24 @@ export class SqliteLedgerRepository implements LedgerRepository {
         after,
         command.changedAt,
       );
+      // 帳本變更（這筆交易被改了）與告知使用者的訊息在同一個 transaction 內提交，
+      // 兩者不可能只有一半——與 confirmDraft 同一個道理。
+      this.enqueueOutbox(
+        outbox.messageId,
+        command.ownerId,
+        outbox.cause,
+        outbox.render(after),
+        command.changedAt,
+      );
       return after;
     });
     return Promise.resolve(execute.immediate());
   }
 
-  public softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction> {
+  public softDeleteTransaction(
+    command: DeleteTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
       const before = this.requireMutable(command.ownerId, command.transactionId);
       if (before.updatedAt !== command.expectedUpdatedAt)
@@ -610,6 +625,13 @@ export class SqliteLedgerRepository implements LedgerRepository {
         "transaction_deleted",
         before,
         after,
+        command.changedAt,
+      );
+      this.enqueueOutbox(
+        outbox.messageId,
+        command.ownerId,
+        outbox.cause,
+        outbox.render(after),
         command.changedAt,
       );
       return after;

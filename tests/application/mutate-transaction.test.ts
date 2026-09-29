@@ -30,6 +30,16 @@ const transaction: ConfirmedTransaction = {
   status: "confirmed",
 };
 
+// 測試不關心遞送內容，只需要滿足 updateConfirmedTransaction／softDeleteConfirmedTransaction
+// 的必填 outbox 參數。
+function testOutbox(messageId: string) {
+  return {
+    messageId,
+    cause: "transaction_updated" as const,
+    render: () => ({ chatId: "1", text: "ok" }),
+  };
+}
+
 function inputEvent(eventId: string) {
   return {
     eventId,
@@ -53,9 +63,9 @@ describe("transaction mutation services", () => {
       return record(input);
     };
     const update = repository.updateTransaction.bind(repository);
-    repository.updateTransaction = async (command) => {
+    repository.updateTransaction = async (command, outbox) => {
       calls.push("update");
-      return update(command);
+      return update(command, outbox);
     };
 
     await updateConfirmedTransaction(
@@ -69,6 +79,7 @@ describe("transaction mutation services", () => {
         changedAt: "2026-09-18T02:00:00.000Z",
       },
       { repository, inputEvent: inputEvent("edit-event") },
+      testOutbox("outbox-update"),
     );
 
     expect(calls).toEqual(["input", "update"]);
@@ -84,9 +95,9 @@ describe("transaction mutation services", () => {
       return record(input);
     };
     const remove = repository.softDeleteTransaction.bind(repository);
-    repository.softDeleteTransaction = async (command) => {
+    repository.softDeleteTransaction = async (command, outbox) => {
       calls.push("delete");
-      return remove(command);
+      return remove(command, outbox);
     };
 
     await softDeleteConfirmedTransaction(
@@ -99,6 +110,7 @@ describe("transaction mutation services", () => {
         changedAt: "2026-09-18T02:00:00.000Z",
       },
       { repository, inputEvent: inputEvent("delete-event") },
+      { ...testOutbox("outbox-delete"), cause: "transaction_deleted" },
     );
 
     expect(calls).toEqual(["input", "delete"]);

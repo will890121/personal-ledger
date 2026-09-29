@@ -136,6 +136,7 @@ describe("abandonAdvance on a real sqlite repository", () => {
         generateId: () => `abandon-${String(++counter)}`,
         now: () => new Date("2026-09-24T01:00:00.000Z"),
       },
+      testOutbox("outbox-abandon"),
     );
 
     expect(result.kind).toBe("abandoned");

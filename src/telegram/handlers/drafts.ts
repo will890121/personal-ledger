@@ -266,6 +266,10 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     }
     const chatId = String(context.chat?.id ?? "");
     const targetMessageId = String(context.callbackQuery.message?.message_id ?? "");
+    // 代墊回收草稿（record-recovery.ts 產生）與一般交易草稿走的是同一顆「確認」鍵、
+    // 同一個 confirmDraft，差別只在於帳本變更的「原因」——這裡沒有另一條獨立的
+    // repository 寫入路徑可以區分，唯一看得出來的信號就是配置本身的 purpose。
+    const isRecovery = record.draft.allocations.some((item) => item.purpose === "advance_recovery");
     await confirmDraft(
       dependencies.repository,
       draftId,
@@ -273,12 +277,14 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       dependencies.generateId(),
       {
         messageId: dependencies.generateId(),
-        cause: "transaction_confirmed",
+        cause: isRecovery ? "recovery_recorded" : "transaction_confirmed",
         // 在 repository 的 transaction 內被呼叫：transactionId 這時才存在。
         render: (confirmed) => ({
           chatId,
           targetMessageId,
-          text: `已入帳：${confirmed.amount.currency} ${confirmed.amount.amount}\n交易 ID：${confirmed.transactionId}`,
+          text: isRecovery
+            ? `已記錄代墊回收：${confirmed.amount.currency} ${confirmed.amount.amount}`
+            : `已入帳：${confirmed.amount.currency} ${confirmed.amount.amount}\n交易 ID：${confirmed.transactionId}`,
         }),
       },
     );

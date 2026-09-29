@@ -293,6 +293,15 @@ export function registerAdvanceHandlers(bot: Bot, dependencies: LedgerBotDepende
       await context.answerCallbackQuery({ text: "操作已失效" });
       return;
     }
+    // render 必須在呼叫 abandonAdvance 之前就能算出文字，而放棄了多少要看
+    // outstanding——不能等 abandonAdvance 回傳後才知道，因為 render 是在它
+    // 內部的 DB transaction 裡被呼叫的。這裡多查一次未回收餘額換來這件事。
+    const outstanding = await findOutstandingByAllocationId(dependencies, allocationId);
+    if (!outstanding) {
+      await context.answerCallbackQuery({ text: "此代墊已無餘額可放棄" });
+      return;
+    }
+    const chatId = String(context.chat?.id ?? "");
     const result = await abandonAdvance(
       {
         ownerId: dependencies.ownerId,
@@ -306,6 +315,14 @@ export function registerAdvanceHandlers(bot: Bot, dependencies: LedgerBotDepende
         generateId: dependencies.generateId,
         now: dependencies.now,
       },
+      {
+        messageId: dependencies.generateId(),
+        cause: "advance_abandoned",
+        render: () => ({
+          chatId,
+          text: `已放棄回收 ${outstanding.outstanding}，已計入 ${outstanding.occurredDate} 的個人消費。`,
+        }),
+      },
     );
     if (result.kind === "not_found") {
       await context.answerCallbackQuery({ text: "交易不存在" });
@@ -316,6 +333,11 @@ export function registerAdvanceHandlers(bot: Bot, dependencies: LedgerBotDepende
       return;
     }
     await context.answerCallbackQuery({ text: `已放棄回收 ${result.amount}` });
+    // 先讓 outbox 把「已放棄回收」的訊息送出去，再重繪代墊清單：清單本身是
+    // 純 UI 訊息（見 M4 設計 §2），不走 outbox，但呼叫順序仍然重要——
+    // refreshAdvancesMessage 的 editMessageText 必須是這次操作最後一個送出的
+    // 呼叫，才會是使用者最後看到、也是測試斷言的那一則。
+    await dependencies.outboxRunner.drainOnce();
     await refreshAdvancesMessage(context, dependencies, 0);
   });
 

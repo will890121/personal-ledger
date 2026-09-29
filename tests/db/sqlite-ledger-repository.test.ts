@@ -267,55 +267,70 @@ describe("SqliteLedgerRepository", () => {
       rawText: "改成晚餐",
       receivedAt: "2026-09-18T02:00:00.000Z",
     });
-    const updated = await repository.updateTransaction({
-      ownerId: "123",
-      transactionId: original.transactionId,
-      sourceEventId: "edit-event",
-      auditEventId: "audit-update",
-      expectedUpdatedAt: original.updatedAt ?? "",
-      replacement: { ...original, note: "與朋友晚餐" },
-      changedAt: "2026-09-18T02:00:00.000Z",
-    });
+    const updated = await repository.updateTransaction(
+      {
+        ownerId: "123",
+        transactionId: original.transactionId,
+        sourceEventId: "edit-event",
+        auditEventId: "audit-update",
+        expectedUpdatedAt: original.updatedAt ?? "",
+        replacement: { ...original, note: "與朋友晚餐" },
+        changedAt: "2026-09-18T02:00:00.000Z",
+      },
+      testOutbox("outbox-update"),
+    );
     expect(updated).toMatchObject({ note: "與朋友晚餐", updatedAt: "2026-09-18T02:00:00.000Z" });
     expect(() =>
-      repository.updateTransaction({
-        ownerId: "123",
-        transactionId: original.transactionId,
-        sourceEventId: "edit-event",
-        auditEventId: "audit-stale",
-        expectedUpdatedAt: original.updatedAt ?? "",
-        replacement: original,
-        changedAt: "2026-09-18T03:00:00.000Z",
-      }),
+      repository.updateTransaction(
+        {
+          ownerId: "123",
+          transactionId: original.transactionId,
+          sourceEventId: "edit-event",
+          auditEventId: "audit-stale",
+          expectedUpdatedAt: original.updatedAt ?? "",
+          replacement: original,
+          changedAt: "2026-09-18T03:00:00.000Z",
+        },
+        testOutbox("outbox-stale"),
+      ),
     ).toThrow("stale transaction update");
     expect(() =>
-      repository.softDeleteTransaction({
-        ownerId: "other",
-        transactionId: original.transactionId,
-        sourceEventId: "edit-event",
-        auditEventId: "audit-other",
-        expectedUpdatedAt: updated.updatedAt ?? "",
-        changedAt: "2026-09-18T03:00:00.000Z",
-      }),
+      repository.softDeleteTransaction(
+        {
+          ownerId: "other",
+          transactionId: original.transactionId,
+          sourceEventId: "edit-event",
+          auditEventId: "audit-other",
+          expectedUpdatedAt: updated.updatedAt ?? "",
+          changedAt: "2026-09-18T03:00:00.000Z",
+        },
+        testOutbox("outbox-other-owner"),
+      ),
     ).toThrow("transaction not found for owner");
-    const deleted = await repository.softDeleteTransaction({
-      ownerId: "123",
-      transactionId: original.transactionId,
-      sourceEventId: "edit-event",
-      auditEventId: "audit-delete",
-      expectedUpdatedAt: updated.updatedAt ?? "",
-      changedAt: "2026-09-18T03:00:00.000Z",
-    });
-    expect(deleted).toMatchObject({ status: "deleted", deletedAt: "2026-09-18T03:00:00.000Z" });
-    expect(() =>
-      repository.softDeleteTransaction({
+    const deleted = await repository.softDeleteTransaction(
+      {
         ownerId: "123",
         transactionId: original.transactionId,
         sourceEventId: "edit-event",
-        auditEventId: "audit-delete-twice",
-        expectedUpdatedAt: deleted.updatedAt ?? "",
-        changedAt: "2026-09-18T04:00:00.000Z",
-      }),
+        auditEventId: "audit-delete",
+        expectedUpdatedAt: updated.updatedAt ?? "",
+        changedAt: "2026-09-18T03:00:00.000Z",
+      },
+      testOutbox("outbox-delete"),
+    );
+    expect(deleted).toMatchObject({ status: "deleted", deletedAt: "2026-09-18T03:00:00.000Z" });
+    expect(() =>
+      repository.softDeleteTransaction(
+        {
+          ownerId: "123",
+          transactionId: original.transactionId,
+          sourceEventId: "edit-event",
+          auditEventId: "audit-delete-twice",
+          expectedUpdatedAt: deleted.updatedAt ?? "",
+          changedAt: "2026-09-18T04:00:00.000Z",
+        },
+        testOutbox("outbox-delete-twice"),
+      ),
     ).toThrow("deleted transaction cannot be mutated");
     await expect(repository.listRecent("123", 10)).resolves.toEqual([]);
     await expect(repository.listAuditEvents("123", original.transactionId)).resolves.toMatchObject([

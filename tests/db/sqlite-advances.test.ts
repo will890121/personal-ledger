@@ -145,14 +145,17 @@ async function setupAdvanceLedgerWithDeletedRecovery(recoveryAmount: string): Pr
     await setupAdvanceLedgerWithRecovery(recoveryAmount);
 
   const recovery = await repository.getTransaction("owner-1", recoveryTransactionId);
-  await repository.softDeleteTransaction({
-    ownerId: "owner-1",
-    transactionId: recoveryTransactionId,
-    sourceEventId: "recovery-event",
-    auditEventId: "recovery-delete-audit",
-    expectedUpdatedAt: recovery?.updatedAt ?? "",
-    changedAt: "2026-09-24T04:00:00.000Z",
-  });
+  await repository.softDeleteTransaction(
+    {
+      ownerId: "owner-1",
+      transactionId: recoveryTransactionId,
+      sourceEventId: "recovery-event",
+      auditEventId: "recovery-delete-audit",
+      expectedUpdatedAt: recovery?.updatedAt ?? "",
+      changedAt: "2026-09-24T04:00:00.000Z",
+    },
+    testOutbox("outbox-recovery-delete"),
+  );
 
   return { repository };
 }
@@ -194,7 +197,9 @@ describe("advance queries", () => {
     // 這與既有的 tests/db/sqlite-ledger-repository.test.ts（見 "stale transaction update" /
     // "transaction not found for owner" 案例）採用相同的同步 throw 斷言慣例，
     // 而非 `await expect(...).rejects.toThrow(...)`。
-    expect(() => repository.softDeleteTransaction(command)).toThrow("advance still has recoveries");
+    expect(() =>
+      repository.softDeleteTransaction(command, testOutbox("outbox-blocked-delete")),
+    ).toThrow("advance still has recoveries");
   });
 
   it("counts recoveries pointing at a transaction", async () => {

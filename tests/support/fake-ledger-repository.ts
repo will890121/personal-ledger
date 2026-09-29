@@ -475,7 +475,10 @@ export class FakeLedgerRepository implements LedgerRepository {
     );
   }
 
-  public updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction> {
+  public updateTransaction(
+    command: UpdateTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     const current = [...this.transactions.entries()].find(
       ([, item]) =>
         item.ownerId === command.ownerId && item.transactionId === command.transactionId,
@@ -501,10 +504,20 @@ export class FakeLedgerRepository implements LedgerRepository {
       after: updated,
       createdAt: command.changedAt,
     });
+    this.enqueueOutbox(
+      outbox.messageId,
+      command.ownerId,
+      outbox.cause,
+      outbox.render(updated),
+      command.changedAt,
+    );
     return Promise.resolve(updated);
   }
 
-  public softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction> {
+  public softDeleteTransaction(
+    command: DeleteTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     return this.getTransaction(command.ownerId, command.transactionId).then((current) => {
       if (!current) throw new Error("transaction not found for owner");
       if ((current.updatedAt ?? current.confirmedAt) !== command.expectedUpdatedAt) {
@@ -530,6 +543,13 @@ export class FakeLedgerRepository implements LedgerRepository {
         after: deleted,
         createdAt: command.changedAt,
       });
+      this.enqueueOutbox(
+        outbox.messageId,
+        command.ownerId,
+        outbox.cause,
+        outbox.render(deleted),
+        command.changedAt,
+      );
       return deleted;
     });
   }

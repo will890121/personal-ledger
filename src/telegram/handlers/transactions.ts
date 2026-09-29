@@ -179,6 +179,8 @@ export function registerTransactionHandlers(bot: Bot, dependencies: LedgerBotDep
     }
     const changedAt = dependencies.now().toISOString();
     const eventId = dependencies.generateId();
+    const chatId = String(context.chat?.id ?? "");
+    const targetMessageId = String(context.callbackQuery.message?.message_id ?? "");
     try {
       await softDeleteConfirmedTransaction(
         {
@@ -201,13 +203,26 @@ export function registerTransactionHandlers(bot: Bot, dependencies: LedgerBotDep
             receivedAt: changedAt,
           },
         },
+        {
+          messageId: dependencies.generateId(),
+          cause: "transaction_deleted",
+          // 就地覆寫「確認刪除」那則訊息，並帶上「返回交易清單」鍵——這顆鍵原本是
+          // handler 自己 editMessageText 時掛的，改走 outbox 遞送若沒把它一併存進
+          // render 的結果，訊息送到時就會悄悄少一顆按鈕。
+          render: () => ({
+            chatId,
+            targetMessageId,
+            text: "交易已刪除。",
+            replyMarkup: JSON.stringify({
+              inline_keyboard: [[{ text: "返回交易清單", callback_data: "recent-home" }]],
+            }),
+          }),
+        },
       );
       await context.answerCallbackQuery({ text: "交易已刪除" });
-      await context.editMessageText("交易已刪除。", {
-        reply_markup: {
-          inline_keyboard: [[{ text: "返回交易清單", callback_data: "recent-home" }]],
-        },
-      });
+      // 訊息一律由 runner 送出：handler 只負責 enqueue 與提交後立刻 drainOnce()，
+      // 不自己再 editMessageText 一次，否則「已送出」會有兩個真相來源。
+      await dependencies.outboxRunner.drainOnce();
     } catch {
       await context.answerCallbackQuery({ text: "無法刪除交易" });
     }
@@ -288,7 +303,7 @@ export function registerTransactionHandlers(bot: Bot, dependencies: LedgerBotDep
     const draftId = context.callbackQuery.data.slice("refund-confirm:".length);
     const chatId = String(context.chat?.id ?? "");
     const targetMessageId = String(context.callbackQuery.message?.message_id ?? "");
-    const transaction = await confirmDraft(
+    await confirmDraft(
       dependencies.repository,
       draftId,
       dependencies.now().toISOString(),
@@ -296,24 +311,23 @@ export function registerTransactionHandlers(bot: Bot, dependencies: LedgerBotDep
       {
         messageId: dependencies.generateId(),
         cause: "transaction_confirmed",
-        // Task 7 尚未把這個 handler 改走 outbox 遞送，這裡先補足必填參數，內容
-        // 與下方立即送出的 editMessageText 一致；之後接上 runner 時再移除重複。
+        // 就地覆寫退款確認那則訊息，並帶上「返回交易清單」鍵：這顆鍵原本掛在
+        // handler 自己送出的 editMessageText 上，若不搬進 render 的結果，
+        // 改走 outbox 之後這顆按鈕會無聲消失。
         render: (confirmed) => ({
           chatId,
           targetMessageId,
           text: `退款已入帳：${confirmed.amount.currency} ${confirmed.amount.amount}`,
+          replyMarkup: JSON.stringify({
+            inline_keyboard: [[{ text: "返回交易清單", callback_data: "recent-home" }]],
+          }),
         }),
       },
     );
     await context.answerCallbackQuery({ text: "退款已入帳" });
-    await context.editMessageText(
-      `退款已入帳：${transaction.amount.currency} ${transaction.amount.amount}`,
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: "返回交易清單", callback_data: "recent-home" }]],
-        },
-      },
-    );
+    // 訊息一律由 runner 送出：不自己再 editMessageText 一次，否則 runner 稍後
+    // drainOnce() 又會送一次，同一則訊息出現兩遍。
+    await dependencies.outboxRunner.drainOnce();
   });
 
   bot.callbackQuery(/^refund-cancel:/, async (context) => {
