@@ -14,7 +14,28 @@
 
 ## 備份
 
-### 建議做法：`VACUUM INTO`（原子）
+### 建議做法：`scripts/backup.sh`
+
+```bash
+./scripts/backup.sh              # 快照到 backups/<時間戳>/，保留最近 10 份
+KEEP=20 ./scripts/backup.sh      # 改保留份數
+```
+
+它做三件事：`VACUUM INTO` 取一致快照、當場跑 `integrity_check`（驗證失敗就不留下檔案）、
+刪掉超出保留份數的舊快照。**只刪自己產生的時間戳目錄**，手動命名的備份
+（`m3b-upgrade-…` 之類）不動。
+
+排程的話：
+
+```bash
+# 每天 03:00，crontab -e
+0 3 * * * cd /Users/zhangyuwei/Documents/projects/personal-ledger && ./scripts/backup.sh >> /tmp/ledger-backup.log 2>&1
+```
+
+腳本刻意只用 bash 3.2 有的語法（macOS 內建就是 3.2，沒有 `mapfile`），變數後面接全形字元時
+一律用 `${}` 界定——非 UTF-8 locale 下 bash 3.2 會把多位元組字元的首個位元組併進變數名。
+
+### 底層做法：`VACUUM INTO`（原子）
 
 ```bash
 DEST=backups/$(date +%Y-%m-%d-%H%M)
@@ -113,11 +134,16 @@ docker start personal-ledger          # 把線上服務接回原本的 volume
 | 線上服務停機 | 40 秒 |
 | 線上資料 | 演練前後一致，未受影響 |
 
+同日另外驗證了 `scripts/backup.sh`：連續執行產生的快照 `integrity_check` 全部 `ok`，
+`KEEP=2` 正確刪除逾期的時間戳快照而未動到手動命名的備份，最新一份快照還原後
+`integrity_check`、`foreign_key_check` 皆通過，schema 7、資料筆數正確。
+
 ## 尚未補上的缺口
 
-1. **沒有自動化**。所有備份都是人工在 migration 前手動執行的。排程快照屬於 M5。
+1. **沒有排程**。`scripts/backup.sh` 已經可用，但還沒掛上 cron，仍然要人工執行。
 2. **沒有異地副本**。`backups/` 只存在這台機器上，且已被 `.gitignore` 排除。Google Drive
    每日快照屬於 M5。
 3. **沒有排程演練**。`docs/roadmap.md` 第 5 節要求每週一次，本次是第一次執行。
 4. **還原必須停機**。單一 Bot token 的必然結果。若要零停機驗證，需要第二組測試用 token。
-5. **沒有保留政策**。目前五份備份全部留著，沒有輪替或刪除規則。
+5. ~~沒有保留政策~~。`scripts/backup.sh` 保留最近 `KEEP` 份（預設 10）；`backups/` 底下
+   手動命名的那五份不受規則管理，要清要自己來。
