@@ -6,7 +6,12 @@ import {
   type ConfirmedTransaction,
   type TransactionDraft,
 } from "../../src/domain/ledger.js";
-import type { OutboxCause, OutboxMessage, OutboxStatus } from "../../src/domain/outbox.js";
+import type {
+  OutboxCause,
+  OutboxMessage,
+  OutboxPayload,
+  OutboxStatus,
+} from "../../src/domain/outbox.js";
 import type {
   AuditEvent,
   BatchInput,
@@ -16,6 +21,7 @@ import type {
   DraftSelector,
   InputEventInput,
   LedgerRepository,
+  OutboxRequest,
   OutboxSummary,
   PendingDraftSummary,
   PendingQuery,
@@ -393,6 +399,7 @@ export class FakeLedgerRepository implements LedgerRepository {
     draftId: string,
     confirmedAt: string,
     auditEventId: string,
+    outbox: OutboxRequest<ConfirmedTransaction>,
   ): Promise<ConfirmedTransaction> {
     if (!auditEventId) {
       return Promise.reject(new Error("audit event id is required"));
@@ -403,6 +410,7 @@ export class FakeLedgerRepository implements LedgerRepository {
     }
     const existing = this.transactions.get(draft.requestId);
     if (existing) {
+      // 重複確認：outbox 已經有一列了，這裡不推。
       return Promise.resolve(existing);
     }
     if (draft.status === "cancelled") {
@@ -419,7 +427,41 @@ export class FakeLedgerRepository implements LedgerRepository {
     this.drafts.set(draftId, { ...draft, status: "confirmed" });
     const record = this.records.get(draftId);
     if (record) record.status = "confirmed";
+    this.enqueueOutbox(
+      outbox.messageId,
+      draft.ownerId,
+      outbox.cause,
+      outbox.render(transaction),
+      confirmedAt,
+    );
     return Promise.resolve(transaction);
+  }
+
+  /** 與 SqliteLedgerRepository.enqueueOutbox 對齊：只在帳本變更成功時呼叫。 */
+  private enqueueOutbox(
+    messageId: string,
+    ownerId: string,
+    cause: OutboxCause,
+    payload: OutboxPayload,
+    now: string,
+  ): void {
+    this.outboxSequence += 1;
+    this.outboxMessages.set(messageId, {
+      messageId,
+      ownerId,
+      cause,
+      chatId: payload.chatId,
+      ...(payload.targetMessageId ? { targetMessageId: payload.targetMessageId } : {}),
+      text: payload.text,
+      ...(payload.replyMarkup ? { replyMarkup: payload.replyMarkup } : {}),
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: now,
+      leaseExpiresAt: null,
+      createdAt: now,
+      sequence: this.outboxSequence,
+      deliveredAt: null,
+    });
   }
 
   public getTransaction(

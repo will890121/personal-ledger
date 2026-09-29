@@ -9,7 +9,12 @@ import {
   type ConfirmedTransaction,
   type TransactionDraft,
 } from "../domain/ledger.js";
-import { OutboxCauseSchema, type OutboxMessage } from "../domain/outbox.js";
+import {
+  OutboxCauseSchema,
+  type OutboxCause,
+  type OutboxMessage,
+  type OutboxPayload,
+} from "../domain/outbox.js";
 import type {
   AuditAction,
   AuditEvent,
@@ -21,6 +26,7 @@ import type {
   InputEventInput,
   LedgerRepository,
   LinkTransactionCommand,
+  OutboxRequest,
   OutboxSummary,
   PendingDraftSummary,
   PendingQuery,
@@ -391,6 +397,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
     draftId: string,
     confirmedAt: string,
     auditEventId: string,
+    outbox: OutboxRequest<ConfirmedTransaction>,
   ): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
       const draft = this.getDraftSync(draftId);
@@ -463,6 +470,13 @@ export class SqliteLedgerRepository implements LedgerRepository {
           changedAt: confirmedAt,
         });
       }
+      this.enqueueOutbox(
+        outbox.messageId,
+        draft.ownerId,
+        outbox.cause,
+        outbox.render(confirmed),
+        confirmedAt,
+      );
       return confirmed;
     });
     return Promise.resolve(execute.immediate());
@@ -863,6 +877,34 @@ export class SqliteLedgerRepository implements LedgerRepository {
       lastDeliveredAt: counts.last_delivered_at,
       stuck: stuck.map((row) => toOutboxMessage(row)),
     });
+  }
+
+  /** 只在帳本變更的 transaction 內呼叫，兩者因此不可能只有一半。 */
+  private enqueueOutbox(
+    messageId: string,
+    ownerId: string,
+    cause: OutboxCause,
+    payload: OutboxPayload,
+    now: string,
+  ): void {
+    this.database
+      .prepare(
+        `INSERT INTO outbox_messages
+           (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
+            status, attempts, next_attempt_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+      )
+      .run(
+        messageId,
+        ownerId,
+        cause,
+        payload.chatId,
+        payload.targetMessageId ?? null,
+        payload.text,
+        payload.replyMarkup ?? null,
+        now,
+        now,
+      );
   }
 
   private getDraftSync(draftId: string): TransactionDraft | null {

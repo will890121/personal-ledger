@@ -149,6 +149,7 @@ export interface LedgerRepository {
     draftId: string,
     confirmedAt: string,
     auditEventId: string,
+    outbox: OutboxRequest<ConfirmedTransaction>,
   ): Promise<ConfirmedTransaction>;
   cancelDraft(draftId: string): Promise<TransactionDraft>;
   getTransaction(ownerId: string, transactionId: string): Promise<ConfirmedTransaction | null>;

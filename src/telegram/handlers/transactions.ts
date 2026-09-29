@@ -286,11 +286,24 @@ export function registerTransactionHandlers(bot: Bot, dependencies: LedgerBotDep
 
   bot.callbackQuery(/^refund-confirm:/, async (context) => {
     const draftId = context.callbackQuery.data.slice("refund-confirm:".length);
+    const chatId = String(context.chat?.id ?? "");
+    const targetMessageId = String(context.callbackQuery.message?.message_id ?? "");
     const transaction = await confirmDraft(
       dependencies.repository,
       draftId,
       dependencies.now().toISOString(),
       dependencies.generateId(),
+      {
+        messageId: dependencies.generateId(),
+        cause: "transaction_confirmed",
+        // Task 7 尚未把這個 handler 改走 outbox 遞送，這裡先補足必填參數，內容
+        // 與下方立即送出的 editMessageText 一致；之後接上 runner 時再移除重複。
+        render: (confirmed) => ({
+          chatId,
+          targetMessageId,
+          text: `退款已入帳：${confirmed.amount.currency} ${confirmed.amount.amount}`,
+        }),
+      },
     );
     await context.answerCallbackQuery({ text: "退款已入帳" });
     await context.editMessageText(

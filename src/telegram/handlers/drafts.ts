@@ -264,11 +264,24 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       });
       return;
     }
+    const chatId = String(context.chat?.id ?? "");
+    const targetMessageId = String(context.callbackQuery.message?.message_id ?? "");
     const transaction = await confirmDraft(
       dependencies.repository,
       draftId,
       dependencies.now().toISOString(),
       dependencies.generateId(),
+      {
+        messageId: dependencies.generateId(),
+        cause: "transaction_confirmed",
+        // Task 7 會把這個 handler 改走 outbox 遞送並移除下面重複的 editMessageText；
+        // 這裡先補上必填參數，內容與立即送出的訊息一致。
+        render: (confirmed) => ({
+          chatId,
+          targetMessageId,
+          text: `已入帳：${confirmed.amount.currency} ${confirmed.amount.amount}\n交易 ID：${confirmed.transactionId}`,
+        }),
+      },
     );
     await context.answerCallbackQuery({ text: "已確認" });
     await context.editMessageText(

@@ -27,6 +27,16 @@ const draft: TransactionDraft = {
   status: "awaiting_confirmation",
 };
 
+// 測試不關心遞送內容，只需要滿足 confirmDraft 的必填 outbox 參數；messageId 逐次帶入
+// 不同值，避免同一個資料庫裡違反 outbox_messages.message_id 的唯一鍵。
+function testOutbox(messageId: string) {
+  return {
+    messageId,
+    cause: "transaction_confirmed" as const,
+    render: () => ({ chatId: "1", text: "ok" }),
+  };
+}
+
 // 建立一筆含代墊配置的已確認交易，再確認一筆帶 recoversAllocationId 的回收草稿，
 // 用於驗證 recovers_allocation_id 欄位的讀寫往返。
 // 注意：confirmDraft 內部以 randomUUID() 產生 transactionId，無法指定為固定字串，
@@ -73,7 +83,12 @@ async function setupConfirmedAdvance(): Promise<{
     ],
     status: "awaiting_confirmation",
   });
-  await repository.confirmDraft("advance-draft", "2026-09-24T01:01:00.000Z", "advance-audit");
+  await repository.confirmDraft(
+    "advance-draft",
+    "2026-09-24T01:01:00.000Z",
+    "advance-audit",
+    testOutbox("outbox-advance"),
+  );
 
   await repository.recordInputEvent({
     eventId: "recovery-event",
@@ -108,6 +123,7 @@ async function setupConfirmedAdvance(): Promise<{
     "recovery-draft",
     "2026-09-24T02:01:00.000Z",
     "recovery-audit",
+    testOutbox("outbox-recovery"),
   );
 
   return { repository, recoveryTransactionId: recovery.transactionId };
@@ -162,8 +178,18 @@ describe("SqliteLedgerRepository", () => {
     });
     await repository.saveDraft(draft);
 
-    const first = await repository.confirmDraft("draft-1", "2026-09-18T01:01:00.000Z", "audit-1");
-    const second = await repository.confirmDraft("draft-1", "2026-09-18T01:02:00.000Z", "audit-2");
+    const first = await repository.confirmDraft(
+      "draft-1",
+      "2026-09-18T01:01:00.000Z",
+      "audit-1",
+      testOutbox("outbox-first"),
+    );
+    const second = await repository.confirmDraft(
+      "draft-1",
+      "2026-09-18T01:02:00.000Z",
+      "audit-2",
+      testOutbox("outbox-second"),
+    );
 
     expect(second.transactionId).toBe(first.transactionId);
     expect(second.confirmedAt).toBe(first.confirmedAt);
@@ -196,9 +222,14 @@ describe("SqliteLedgerRepository", () => {
     database.exec(`CREATE TRIGGER reject_creation_audit BEFORE INSERT ON audit_events
       WHEN NEW.action = 'transaction_created' BEGIN SELECT RAISE(ABORT, 'audit blocked'); END`);
 
-    expect(() => repository.confirmDraft("draft-1", "2026-09-18T01:01:00.000Z", "audit-1")).toThrow(
-      "audit blocked",
-    );
+    expect(() =>
+      repository.confirmDraft(
+        "draft-1",
+        "2026-09-18T01:01:00.000Z",
+        "audit-1",
+        testOutbox("outbox-blocked"),
+      ),
+    ).toThrow("audit blocked");
     expect(database.prepare("SELECT COUNT(*) AS count FROM transactions").get()).toEqual({
       count: 0,
     });
@@ -225,6 +256,7 @@ describe("SqliteLedgerRepository", () => {
       "draft-1",
       "2026-09-18T01:01:00.000Z",
       "audit-create",
+      testOutbox("outbox-create"),
     );
     await repository.recordInputEvent({
       eventId: "edit-event",
@@ -327,11 +359,13 @@ describe("SqliteLedgerRepository", () => {
       "draft-1",
       "2026-09-18T01:01:00.000Z",
       "audit-expense",
+      testOutbox("outbox-expense"),
     );
     const refund = await repository.confirmDraft(
       "refund-draft",
       "2026-09-18T01:02:00.000Z",
       "audit-refund",
+      testOutbox("outbox-refund"),
     );
     const command = {
       linkId: "refund-link",
@@ -421,6 +455,7 @@ describe("SqliteLedgerRepository", () => {
         "upgrade-draft",
         "2026-09-26T01:01:00.000Z",
         "upgrade-audit",
+        testOutbox("outbox-upgrade"),
       );
 
       expect(
