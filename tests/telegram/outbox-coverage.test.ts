@@ -10,13 +10,14 @@ import { recordRecovery } from "../../src/application/record-recovery.js";
 import { openDatabase } from "../../src/db/database.js";
 import { migrate } from "../../src/db/migrate.js";
 import { SqliteLedgerRepository } from "../../src/db/sqlite-ledger-repository.js";
-import type { ConfirmedTransaction } from "../../src/domain/ledger.js";
+import { ConfirmedTransactionSchema, type ConfirmedTransaction } from "../../src/domain/ledger.js";
 import {
   OutboxCauseSchema,
   type OutboxCause,
   type OutboxMessage,
 } from "../../src/domain/outbox.js";
 import type { OutboxRequest } from "../../src/ports/ledger-repository.js";
+import { callbackUpdate, createHarness, messageUpdate } from "../support/telegram-harness.js";
 
 const OWNER_ID = "owner-1";
 
@@ -325,5 +326,80 @@ describe("every ledger change queues a message", () => {
         "transaction_deleted",
       ]),
     );
+  });
+});
+
+describe("drafts.ts's confirm: handler picks the cause from the draft's own content", () => {
+  // createHarness 的 owner 固定是 "123"（見 telegram-harness.ts），與上面 SQLite
+  // 情境用的 OWNER_ID（"owner-1"）無關，這裡另外命名避免看起來像共用同一個 owner。
+  const HARNESS_OWNER_ID = "123";
+
+  it("still queues recovery_recorded when a surplus recovery also carries an income allocation", async () => {
+    // 這條要釘住的正是 drafts.ts:272 的 isRecovery 判斷：超額回收沖抵之後的完整草稿
+    // 同時帶著 advance_recovery（沖抵的部分）與 income（超額的部分）兩種 purpose 的
+    // 配置。cause 記的是「使用者按下確認的是哪一種草稿」，不是「這筆帳的會計分類」，
+    // 所以即使草稿裡混了 income 配置，只要有任何一筆是 advance_recovery，
+    // 整個確認動作仍然算是一次代墊回收。
+    const { bot, calls, repository, referenceRepository } = createHarness();
+    referenceRepository.counterparties.push({
+      counterpartyId: "xiaoming",
+      ownerId: HARNESS_OWNER_ID,
+      name: "小明",
+      active: true,
+    });
+    // loadIncomeCategoryIds 只挑 kind === "income" && depth === 2 的葉分類，
+    // 缺這個候選清單就會是空的，追問訊息只剩取消鍵，按不出下一步。
+    referenceRepository.categories.push({
+      categoryId: "category-income-other",
+      ownerId: HARNESS_OWNER_ID,
+      key: "income_other",
+      name: "其他收入",
+      kind: "income",
+      parentId: "category-income-root",
+      depth: 2,
+      active: true,
+    });
+    const advance = ConfirmedTransactionSchema.parse({
+      requestId: "req-advance",
+      draftId: "draft-advance",
+      transactionId: "tx-advance",
+      ownerId: HARNESS_OWNER_ID,
+      sourceEventId: "event-advance",
+      occurredDate: "2026-09-10",
+      amount: { amount: "630", currency: "TWD" },
+      status: "confirmed",
+      confirmedAt: "2026-09-10T00:00:00.000Z",
+      allocations: [
+        {
+          allocationId: "alloc-advance",
+          fundsEffect: "outflow",
+          purpose: "advance",
+          amount: { amount: "630", currency: "TWD" },
+          counterpartyId: "xiaoming",
+          category: "餐飲",
+        },
+      ],
+    });
+    repository.transactions.set("req-advance", advance);
+
+    // 還 700：630 沖抵代墊，剩餘 70 超額，需要追問分類。
+    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "小明還 700" }));
+    const prompt = calls.at(-1)?.payload as {
+      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+    };
+    const categoryButton = prompt.reply_markup.inline_keyboard[0]?.[0];
+    if (!categoryButton) throw new Error("expected a category candidate button in the prompt");
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 11, data: categoryButton.callback_data }));
+
+    // 答完分類後草稿已經從 incompleteDrafts 移到 drafts，並且是唯一一筆。
+    const draftId = [...repository.drafts.keys()][0];
+    if (!draftId) throw new Error("expected the surplus draft to be completed by the answer");
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 12, data: `confirm:${draftId}` }));
+
+    const messages = [...repository.outboxMessages.values()];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.cause).toBe("recovery_recorded");
   });
 });

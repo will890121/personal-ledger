@@ -296,6 +296,15 @@ export function registerAdvanceHandlers(bot: Bot, dependencies: LedgerBotDepende
     // render 必須在呼叫 abandonAdvance 之前就能算出文字，而放棄了多少要看
     // outstanding——不能等 abandonAdvance 回傳後才知道，因為 render 是在它
     // 內部的 DB transaction 裡被呼叫的。這裡多查一次未回收餘額換來這件事。
+    //
+    // 這個預先檢查刻意把「這筆分配從未是代墊」與「這筆代墊已全數回收」合併成同一句
+    // 訊息：findOutstandingByAllocationId 兩種情況都回傳 undefined，分不出來。這是
+    // 有意的簡化，不是漏改——resolveRef 只會解析出曾經真實存在過的代墊配置 id
+    // （來自 /advances 清單渲染時 persistRef 寫下的對照），使用者不可能從 UI
+    // 按出一個「從未是代墊」的 id；唯一走得到這裡的是「按鈕還留著，但代墊已經被
+    // 全數回收」。為了分不出來的另一半（真正的 not_found）去恢復一個沒有使用者
+    // 按得到的分支，複雜度不值得。下面 abandonAdvance 回傳 not_found 的分支因此
+    // 也是縱深防禦：目前沒有測試能走到那裡，是故意留著，不是漏改的死碼。
     const outstanding = await findOutstandingByAllocationId(dependencies, allocationId);
     if (!outstanding) {
       await context.answerCallbackQuery({ text: "此代墊已無餘額可放棄" });

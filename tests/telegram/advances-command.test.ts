@@ -243,12 +243,65 @@ describe("/advances", () => {
     await bot.handleUpdate(messageUpdate({ updateId: 10, text: "/advances" }));
     await bot.handleUpdate(callbackUpdate({ updateId: 11, data: `aa:${allocationRef}` }));
 
+    // 只看 calls.at(-1) 抓不到重複遞送：aa-confirm 這一步本來就會送兩則不同的
+    // 訊息（outbox 遞送的「已放棄回收」新訊息 + 代墊清單重繪），重繪永遠排在
+    // 最後，若 handler 或 outbox 哪一邊多送一次，calls.at(-1) 完全看不出來，
+    // 必須數這一步實際送出的總次數。
+    const callsBeforeAbandonConfirm = calls.length;
     await bot.handleUpdate(callbackUpdate({ updateId: 12, data: `aa-confirm:${allocationRef}` }));
+    const abandonConfirmDeliveries = calls
+      .slice(callsBeforeAbandonConfirm)
+      .filter((call) => call.method === "sendMessage" || call.method === "editMessageText");
+    expect(abandonConfirmDeliveries).toHaveLength(2);
+    expect(abandonConfirmDeliveries.filter((call) => call.method === "sendMessage")).toHaveLength(
+      1,
+    );
+    expect(
+      abandonConfirmDeliveries.filter((call) => call.method === "editMessageText"),
+    ).toHaveLength(1);
 
     const edit = calls.at(-1);
     expect(edit?.method).toBe("editMessageText");
     expect(getText(edit)).toContain("未回收 230");
     expect(getText(edit)).not.toContain("400");
+  });
+
+  it("gives the same message for a stale abandon button whether the allocation was never an advance or is already fully recovered (deliberately merged)", async () => {
+    const { bot, calls, repository, allocationRef } = harnessWithAdvances();
+    await bot.handleUpdate(messageUpdate({ updateId: 10, text: "/advances" }));
+    // 把 alloc-1 全額回收：對使用者而言「已無餘額可放棄」的唯一途徑就是這種
+    // 情境——resolveRef 只會解析出曾經真實存在過的代墊配置 id，不可能解析出一個
+    // 從未是代墊的 id，所以這裡驗的是唯一走得到的那一半。
+    const recovery = ConfirmedTransactionSchema.parse({
+      requestId: "req-recovery",
+      draftId: "draft-recovery",
+      transactionId: "tx-recovery",
+      ownerId: OWNER_ID,
+      sourceEventId: "event-recovery",
+      occurredDate: "2026-09-12",
+      amount: { amount: "400", currency: "TWD" },
+      status: "confirmed",
+      confirmedAt: "2026-09-12T00:00:00.000Z",
+      allocations: [
+        {
+          allocationId: "alloc-recovery",
+          fundsEffect: "inflow",
+          purpose: "advance_recovery",
+          amount: { amount: "400", currency: "TWD" },
+          counterpartyId: "xiaoming",
+          category: "餐飲",
+          recoversAllocationId: "alloc-1",
+        },
+      ],
+    });
+    repository.transactions.set("req-recovery", recovery);
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 11, data: `aa-confirm:${allocationRef}` }));
+
+    expect(JSON.stringify(calls.at(-1)?.payload)).toContain("此代墊已無餘額可放棄");
+    // 沒有帳本變更，就不該有任何 outbox 列——這條訊息是 answerCallbackQuery 的
+    // 彈出提示，不是走 outbox 遞送的帳本變更通知。
+    expect(repository.outboxMessages.size).toBe(0);
   });
 
   it("keeps the advance untouched when abandonment is cancelled", async () => {

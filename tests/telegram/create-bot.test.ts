@@ -147,7 +147,7 @@ describe("createLedgerBot", () => {
   });
 
   it("requires confirmation, then records a callback event and soft-deletes only once", async () => {
-    const { bot, repository } = createHarness();
+    const { bot, calls, repository } = createHarness();
     await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
     const draftId = [...repository.drafts.keys()][0] ?? "";
     await bot.handleUpdate(callbackUpdate(2, `confirm:${draftId}`));
@@ -157,7 +157,17 @@ describe("createLedgerBot", () => {
     await expect(
       repository.getTransaction("123", transaction?.transactionId ?? ""),
     ).resolves.toMatchObject({ status: "confirmed" });
+
+    // 訊息只能有一個真相來源：delete-confirm 這一步既 enqueue 又立刻 drainOnce()，
+    // 若 handler 自己再多送一次（例如殘留的 editMessageText），這裡要抓到——
+    // 只看 calls.at(-1) 抓不到，因為它永遠是最後一次呼叫，不代表只呼叫了一次。
+    const callsBeforeDeleteConfirm = calls.length;
     await bot.handleUpdate(callbackUpdate(4, `delete-confirm:${transaction?.transactionId ?? ""}`));
+    const deleteConfirmDeliveries = calls
+      .slice(callsBeforeDeleteConfirm)
+      .filter((call) => call.method === "sendMessage" || call.method === "editMessageText");
+    expect(deleteConfirmDeliveries).toHaveLength(1);
+
     await bot.handleUpdate(callbackUpdate(4, `delete-confirm:${transaction?.transactionId ?? ""}`));
     await expect(
       repository.getTransaction("123", transaction?.transactionId ?? ""),
@@ -185,5 +195,38 @@ describe("createLedgerBot", () => {
       status: "awaiting_confirmation",
     });
     expect(calls.map(getText)).toContainEqual(expect.stringContaining("退款原交易"));
+  });
+
+  it("delivers the refund confirmation exactly once, with a way back to the transaction list", async () => {
+    const { bot, calls, repository } = createHarness();
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120" }));
+    const expenseDraftId = [...repository.drafts.keys()][0] ?? "";
+    await bot.handleUpdate(callbackUpdate(2, `confirm:${expenseDraftId}`));
+    const expense = [...repository.transactions.values()][0];
+    await bot.handleUpdate(messageUpdate({ updateId: 3, text: "/recent" }));
+    await bot.handleUpdate(callbackUpdate(4, `refund:${expense?.transactionId ?? ""}`));
+    const refundDraft = [...repository.drafts.values()].find(
+      (item) => item.refundTargetTransactionId === expense?.transactionId,
+    );
+
+    // 只看 calls.at(-1) 抓不到 handler 自己額外送一次的重複遞送——drainOnce() 之後
+    // 若 handler 還自己 editMessageText 一次，計數就會是 2。
+    const callsBeforeRefundConfirm = calls.length;
+    await bot.handleUpdate(callbackUpdate(5, `refund-confirm:${refundDraft?.draftId ?? ""}`));
+    const refundConfirmDeliveries = calls
+      .slice(callsBeforeRefundConfirm)
+      .filter((call) => call.method === "sendMessage" || call.method === "editMessageText");
+    expect(refundConfirmDeliveries).toHaveLength(1);
+
+    // 這顆「返回交易清單」鍵原本掛在 handler 自己送出的 editMessageText 上；
+    // 改走 outbox 之後若沒把它搬進 render 的結果，訊息送到時就會悄悄少一顆按鈕。
+    const delivered = refundConfirmDeliveries[0]?.payload as {
+      text: string;
+      reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] };
+    };
+    expect(delivered.text).toContain("退款已入帳");
+    expect(delivered.reply_markup.inline_keyboard).toEqual([
+      [{ text: "返回交易清單", callback_data: "recent-home" }],
+    ]);
   });
 });
