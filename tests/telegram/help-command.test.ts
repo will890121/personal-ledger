@@ -21,6 +21,20 @@ describe("/help", () => {
     expect(text).toContain("午餐 1260，小明欠 630");
   });
 
+  // spec §6b 明確要求這四種語法各自至少出現一次；本專案確實支援它們
+  // （src/parser/rule-parser.ts 的日期前綴、src/parser/split-share.ts 的
+  // COUNT_PATTERN 與回收句錨定、src/application/create-batch.ts 的 splitInput），
+  // 但前一輪的 /help 全部漏掉。逐一釘住每一句範例文字，而不是只斷言三個段落
+  // 標題存在：只斷言標題的話，拿掉「小明還 300」這一行、測試仍然是綠的。
+  it.each([
+    ["date prefix", "昨天 Uber 245 國泰卡"],
+    ["equal split", "午餐 1000，三個人平分"],
+    ["repayment", "小明還 300"],
+    ["multiple entries in one message", "午餐 120，Uber 245"],
+  ])("mentions the %s syntax via `%s`", (_label, example) => {
+    expect(formatHelp()).toContain(example);
+  });
+
   it("lists every registered command", () => {
     const text = formatHelp();
 
