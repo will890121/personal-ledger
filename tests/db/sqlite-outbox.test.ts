@@ -20,14 +20,17 @@ describe("outbox storage", () => {
   afterEach(() => database.close());
 
   function seed(messageId: string, nextAttemptAt: string, replyMarkup?: string): void {
+    // created_at 明確寫入，值與 next_attempt_at 相同：本專案所有時間都一律
+    // new Date(...).toISOString()，讓 SQLite 的 DEFAULT CURRENT_TIMESTAMP（沒有毫秒、
+    // 沒有 T/Z）偷偷混進資料列，正是這個 seed 曾經犯過的錯。
     database
       .prepare(
         `INSERT INTO outbox_messages
            (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
-            status, next_attempt_at)
-         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', ?, 'pending', ?)`,
+            status, next_attempt_at, created_at)
+         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', ?, 'pending', ?, ?)`,
       )
-      .run(messageId, replyMarkup ?? null, nextAttemptAt);
+      .run(messageId, replyMarkup ?? null, nextAttemptAt, nextAttemptAt);
   }
 
   it("claims only rows that are due and not already leased", async () => {
@@ -121,6 +124,27 @@ describe("outbox storage", () => {
       needsAttention: 1,
       oldestPendingAt: NOW,
       lastDeliveredAt: LATER,
+    });
+  });
+
+  it("reports oldestPendingAt as when the message was queued, not when it is next due", async () => {
+    // 已經失敗過一次的訊息，next_attempt_at 因退避被推到未來；oldestPendingAt 回答的是
+    // 「卡多久了」，也就是 created_at，不是下一次到期時間——否則 /status 會顯示負的
+    // 等待分鐘數，看起來像還沒到期而不是卡住很久。
+    const queuedAt = "2026-09-30T08:00:00.000Z";
+    const nextAttemptAt = "2026-09-30T11:00:00.000Z";
+    database
+      .prepare(
+        `INSERT INTO outbox_messages
+           (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
+            status, attempts, next_attempt_at, created_at)
+         VALUES ('backing-off', 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', NULL,
+                 'pending', 1, ?, ?)`,
+      )
+      .run(nextAttemptAt, queuedAt);
+
+    await expect(repository.summarizeOutbox("owner-1")).resolves.toMatchObject({
+      oldestPendingAt: queuedAt,
     });
   });
 

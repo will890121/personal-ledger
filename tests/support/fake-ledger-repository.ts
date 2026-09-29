@@ -39,7 +39,10 @@ interface FakeOutboxMessage {
   nextAttemptAt: string;
   leaseExpiresAt: string | null;
   lastError?: string;
-  // 插入順序，取代 SQLite 版的 created_at：summarizeOutbox 的 stuck 清單要照建立順序排。
+  // 對應 SQLite 版的 created_at：訊息何時被排進佇列，summarizeOutbox 的 oldestPendingAt
+  // 與 stuck 清單排序都要用這個欄位，不是 nextAttemptAt——理由見
+  // SqliteLedgerRepository.summarizeOutbox 的註解。
+  createdAt: string;
   sequence: number;
   deliveredAt: string | null;
 }
@@ -96,6 +99,10 @@ export class FakeLedgerRepository implements LedgerRepository {
     text: string;
     replyMarkup?: string;
     nextAttemptAt: string;
+    attempts?: number;
+    // 預設等於 nextAttemptAt，與 SQLite 版測試的 seed() 相同約定；需要「已退避、
+    // next_attempt_at 被推到未來」的情境時才明確傳入更早的值。
+    createdAt?: string;
   }): void {
     this.outboxSequence += 1;
     this.outboxMessages.set(input.messageId, {
@@ -107,9 +114,10 @@ export class FakeLedgerRepository implements LedgerRepository {
       text: input.text,
       ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {}),
       status: "pending",
-      attempts: 0,
+      attempts: input.attempts ?? 0,
       nextAttemptAt: input.nextAttemptAt,
       leaseExpiresAt: null,
+      createdAt: input.createdAt ?? input.nextAttemptAt,
       sequence: this.outboxSequence,
       deliveredAt: null,
     });
@@ -190,8 +198,11 @@ export class FakeLedgerRepository implements LedgerRepository {
     const pending = owned.filter((row) => row.status === "pending");
     const needsAttention = owned.filter((row) => row.status === "needs_attention");
     const delivered = owned.filter((row) => row.deliveredAt !== null);
+    // 用 createdAt（排進佇列的時間），不是 nextAttemptAt（下一次到期時間）：
+    // 已經失敗過的訊息 nextAttemptAt 會因退避被推到未來，拿它當「最舊」會讓 /status
+    // 顯示負的等待分鐘數，見 SqliteLedgerRepository.summarizeOutbox 的同一段說明。
     const oldestPendingAt = pending.reduce<string | null>(
-      (oldest, row) => (oldest === null || row.nextAttemptAt < oldest ? row.nextAttemptAt : oldest),
+      (oldest, row) => (oldest === null || row.createdAt < oldest ? row.createdAt : oldest),
       null,
     );
     const lastDeliveredAt = delivered.reduce<string | null>(
@@ -202,7 +213,10 @@ export class FakeLedgerRepository implements LedgerRepository {
       null,
     );
     const stuck = needsAttention
-      .sort((left, right) => left.sequence - right.sequence)
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.sequence - right.sequence,
+      )
       .slice(0, 5)
       .map((row) => toOutboxMessage(row));
     return Promise.resolve({

@@ -837,9 +837,11 @@ export class SqliteLedgerRepository implements LedgerRepository {
         `SELECT
            sum(status = 'pending') AS pending,
            sum(status = 'needs_attention') AS needs_attention,
-           -- 用 next_attempt_at 而非 created_at：這張表的「等待中」語意是排程時間，
-           -- claimDueOutbox 本身也是照 next_attempt_at 排序取件，兩者要一致。
-           min(CASE WHEN status = 'pending' THEN next_attempt_at END) AS oldest_pending_at,
+           -- 故意用 created_at，不是 next_attempt_at：/status 這裡要回答的是「卡多久了」，
+           -- 也就是這則訊息何時被排進佇列，不是它下一次何時到期。已經失敗過的訊息
+           -- next_attempt_at 會被往後挪到未來（退避），若拿它當「最舊」的依據，
+           -- 對使用者顯示的就是負的等待分鐘數——看起來像還沒到期，而不是卡住很久了。
+           min(CASE WHEN status = 'pending' THEN created_at END) AS oldest_pending_at,
            max(delivered_at) AS last_delivered_at
          FROM outbox_messages WHERE owner_id = ?`,
       )
