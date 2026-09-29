@@ -148,13 +148,15 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
 }
 
 /**
- * 向 Telegram 註冊「/」選單裡的指令清單（`setMyCommands`）。
+ * 向 Telegram 註冊「/」選單裡的指令清單（`setMyCommands`）。這支只做這一件事，
+ * 不做輪詢——取名避免叫 startBot，免得下一個讀者以為它會啟動 bot、或以為呼叫
+ * 它就夠了、`bot.start()` 可以省。
  *
  * 刻意不放進 createLedgerBot：那是一次網路呼叫，而 createLedgerBot 在測試裡被
  * 建構數百次——每次都順便打一次 setMyCommands 沒有意義，也會讓「測試建構 bot」
  * 跟「應用程式真正上線」這兩件事混在一起。真正呼叫的地方是 src/main.ts，
  * 在 LEDGER_STARTUP_CHECK 探測之後、真正開始輪詢（bot.start()）之前。
  */
-export async function startBot(bot: Bot): Promise<void> {
+export async function registerCommandMenu(bot: Bot): Promise<void> {
   await bot.api.setMyCommands([...LEDGER_COMMANDS]);
 }

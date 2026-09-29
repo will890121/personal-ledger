@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LEDGER_COMMANDS } from "../../src/telegram/commands.js";
-import { startBot } from "../../src/telegram/create-bot.js";
+import { registerCommandMenu } from "../../src/telegram/create-bot.js";
 import { formatHelp } from "../../src/telegram/format-help.js";
 import { createHarness as harness, getText, messageUpdate } from "../support/telegram-harness.js";
 
@@ -46,7 +46,7 @@ describe("/help", () => {
   it("registers the same list with Telegram so the / menu shows it", async () => {
     const { bot, calls } = harness();
 
-    await startBot(bot);
+    await registerCommandMenu(bot);
 
     const call = calls.find((item) => item.method === "setMyCommands");
     expect(call).toBeDefined();
