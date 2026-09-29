@@ -31,10 +31,16 @@ trap 'rmdir "$DEST" 2>/dev/null || true' EXIT
 # 快照當場驗一次：備份沒驗證過等於沒有備份。
 # VACUUM INTO 的目標路徑在 SQL 裡必須是單引號字串，而這段 sh -c 本身是單引號包起來的，
 # 所以整句 SQL 由外層組好用環境變數傳進去，避免引號互相打架。
+#
+# 來源卷不能掛 :ro。M4 切到 WAL 之後，即使只是唯讀讀取，SQLite 也要在同一個目錄
+# 建立 -shm 共享記憶體索引檔才能組出一致的讀取快照（沒有它連 PRAGMA journal_mode 都會
+# 是 "unable to open database file"，2026-09-30 實測踩過）。真正的唯讀保護在下面的
+# `sqlite3 -readonly`：那是 SQLite 連線層級的旗標，這支腳本本來就只送 VACUUM INTO 與
+# PRAGMA，不會寫回來源卷。
 docker run --rm \
   -e DB_NAME="$DB_NAME" \
   -e SNAPSHOT_SQL="VACUUM INTO '/out/$DB_NAME'" \
-  -v "$VOLUME":/data:ro \
+  -v "$VOLUME":/data \
   -v "$DEST":/out \
   alpine:3 sh -c '
     apk add --no-cache sqlite >/dev/null 2>&1

@@ -118,15 +118,20 @@ M2 的解析器只認得「午餐」一個關鍵字，其餘句子只要帶得�
 
 ### M4：可靠性、工作佇列與可觀測性
 
+狀態：已完成（2026-09-30，schema 8，496 個測試）。
+
 交付內容：
 
-- SQLite 持久化 jobs/outbox。
+- SQLite 持久化 jobs/outbox（`outbox_messages`，migration `0008_outbox.sql`）。
 - lease、指數退避、最大重試及 `needs_attention`。
 - 啟動恢復、重複 callback、重複 update 及 crash recovery 測試。
 - `/status`、異常通知及正式環境日誌遮罩。
-- migration 前備份及失敗停止啟動。
+- migration 前備份（`src/db/pre-migration-snapshot.ts`）及失敗停止啟動。
+- `WAL` + `synchronous=FULL`（`src/db/database.ts`），`/help` 依規格補齊語法範例。
 
 通過條件：AC-20、AC-23、AC-24、AC-28 通過；在確認後強制終止程序也不遺失或重複交易。
+
+驗收紀錄：[`docs/quality/m4-acceptance.md`](quality/m4-acceptance.md)
 
 ### M5：Google Sheets、備份與維護 CLI
 
@@ -205,14 +210,16 @@ M2 的解析器只認得「午餐」一個關鍵字，其餘句子只要帶得�
 
 ## 6. 現在要做的事
 
-M0 至 M3b 全部完成並上線（2026-09-29，schema 7，384 個測試）。下一個里程碑是
-**M4：可靠性、工作佇列與可觀測性**，尚未開始。
+M0 至 M4 全部完成並上線（2026-09-30，schema 8，496 個測試）。下一個里程碑是
+**M5：Google Sheets、備份與維護 CLI**，尚未開始。
 
-在那之前值得注意的兩件事：
+在那之前值得注意的幾件事：
 
-1. 備份目前完全是手動的 —— 每次 migration 前手動複製資料卷到 `backups/`，沒有自動化，
-   也沒有做過還原演練。自動快照與還原 CLI 排在 M5，但上面第 5 節的「每週至少執行一次
-   手動 Docker 啟動與資料還原演練」現在就該開始。
+1. 備份已經有可用、已實測的腳本（`scripts/backup.sh`，`VACUUM INTO` + `integrity_check` +
+   保留政策），migration 前也已經自動快照（`src/db/pre-migration-snapshot.ts`）。還缺的是
+   排程（目前仍要人工執行 `scripts/backup.sh`）與異地副本；還原 CLI 排在 M5，見
+   [`docs/operations/backup-and-restore.md`](operations/backup-and-restore.md)。上面第 5
+   節的「每週至少執行一次手動 Docker 啟動與資料還原演練」現在就該開始，不用等 M5。
 2. `docs/todo/merchant-registration.md` 掛在 M6 dogfood 決定：兩週真實記帳若出現
    「想按商家看支出」或「一直為店名教關鍵字」其中之一就成立，屆時進 M8；都沒出現就
    關掉。延後是安全的，因為 `rawInputSnapshot` 保留了原句，之後可以回填。
