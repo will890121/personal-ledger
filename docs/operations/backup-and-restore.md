@@ -25,6 +25,27 @@ KEEP=20 ./scripts/backup.sh      # 改保留份數
 刪掉超出保留份數的舊快照。**只刪自己產生的時間戳目錄**，手動命名的備份
 （`m3b-upgrade-…` 之類）不動。
 
+### 自我測試：`scripts/backup-selftest.sh`
+
+`scripts/backup.sh` 曾經在 M4 切到 WAL 之後整支壞掉一整個里程碑（見下方「2026-09-30
+更正」），而唯一發現的原因是剛好有人手動跑了一次演練。**改動 `scripts/backup.sh` 或
+`journal_mode` 之後，跑一次：**
+
+```bash
+scripts/backup-selftest.sh
+```
+
+它在一個臨時 Docker volume（不是 `m1-foundation-first-slice_ledger-data`）裡端到端驗證：
+建一列只存在 `-wal`、尚未 checkpoint 的已提交資料，對這個臨時卷跑
+`scripts/backup.sh`，斷言離開碼 0、快照的 `integrity_check` 是 `ok`、快照裡查得到那一
+列，而且對照組（繞過 `scripts/backup.sh`、直接複製主檔案）確實查不到那一列——證明
+這支測試真的在測「WAL 裡已提交但沒 checkpoint 的資料有沒有被收進備份」這件事，不是
+恆真。用完自己清理，包含失敗時也會清。
+
+**這支測試不在 `pnpm check` 裡**：`pnpm check` 跑在沒有 docker socket 的容器裡，
+vitest 測不到一支工作內容就是編排 docker 的腳本，所以這是一支只能在主機上手動跑的
+自我測試腳本。
+
 排程的話：
 
 ```bash
