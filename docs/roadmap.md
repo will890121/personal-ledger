@@ -213,4 +213,6 @@ M0 至 M3b 全部完成並上線（2026-09-29，schema 7，384 個測試）。�
 1. 備份目前完全是手動的 —— 每次 migration 前手動複製資料卷到 `backups/`，沒有自動化，
    也沒有做過還原演練。自動快照與還原 CLI 排在 M5，但上面第 5 節的「每週至少執行一次
    手動 Docker 啟動與資料還原演練」現在就該開始。
-2. `docs/todo/merchant-registration.md` 尚未排入任何里程碑。
+2. `docs/todo/merchant-registration.md` 掛在 M6 dogfood 決定：兩週真實記帳若出現
+   「想按商家看支出」或「一直為店名教關鍵字」其中之一就成立，屆時進 M8；都沒出現就
+   關掉。延後是安全的，因為 `rawInputSnapshot` 保留了原句，之後可以回填。
