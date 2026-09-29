@@ -157,6 +157,51 @@ describe("logger", () => {
     });
   });
 
+  // Task 12 fix round 2：深度上限（MAX_REDACTION_DEPTH，目前 8）本身沒有測試釘住——
+  // 複審把常數從 8 改成 100000 之後，原本 18 條測試照樣全綠。這裡直接咬住
+  // src/logger.ts 裡的佔位字串本身，常數改大或那個分支被拿掉都要讓這裡變紅。
+  describe("depth cap (Task 12 fix 2)", () => {
+    // 用同一個 key 名一路往下包 layers 層，最裡面放一個物件——不是字串。
+    // redactValue 對字串一律先做 token 樣式遮罩再回傳，深度檢查那個分支
+    // 根本輪不到執行；只有物件（或陣列）才會真的走到深度上限判斷。
+    function wrapNested(layers: number, innermost: unknown): unknown {
+      let value = innermost;
+      for (let i = layers; i >= 1; i -= 1) {
+        value = { [`level_${String(i)}`]: value };
+      }
+      return value;
+    }
+
+    it("replaces an object nested past MAX_REDACTION_DEPTH with the placeholder, hiding what's inside it", () => {
+      const { logger, lines } = capture();
+
+      // context 這一層算第 1 層，再包 11 層 level_*，最內層的物件落在第 12 層——
+      // 遠遠超過目前的上限 8，整包都該換成佔位字串，連裡面的欄位都不該印出來。
+      logger.error("x", {
+        context: wrapNested(11, { sentinel: "SECRET_BEYOND_DEPTH_CAP" }),
+      });
+
+      const output = lines.join("\n");
+      expect(output).not.toContain("SECRET_BEYOND_DEPTH_CAP");
+      expect(output).toContain("[redacted: max depth reached]");
+    });
+
+    it("still recurses normally for an object just inside MAX_REDACTION_DEPTH", () => {
+      const { logger, lines } = capture();
+
+      // 同樣的結構只包 7 層，讓最內層的物件剛好落在第 8 層（等於上限本身）——
+      // 這一層不該被換成佔位字串，裡面的欄位要照常遞迴處理、正常印出來。
+      // 這一條也順便擋住把上限誤設成 0 之類過小的值：那樣的話這裡就會變紅。
+      logger.error("x", {
+        context: wrapNested(7, { sentinel: "SECRET_WITHIN_DEPTH_CAP" }),
+      });
+
+      const output = lines.join("\n");
+      expect(output).toContain("SECRET_WITHIN_DEPTH_CAP");
+      expect(output).not.toContain("[redacted: max depth reached]");
+    });
+  });
+
   // Finding 3 / Minor 4：owner 的識別碼不管記在 ownerId 或 chatId 底下、
   // 不管型別是字串還是數字，都要走同一條雜湊路徑。
   describe("owner-identifying fields (Finding 3, Minor 4)", () => {
