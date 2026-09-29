@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 import { LEDGER_COMMANDS } from "../../src/telegram/commands.js";
 import { startBot } from "../../src/telegram/create-bot.js";
 import { formatHelp } from "../../src/telegram/format-help.js";
-import { createHarness as harness, messageUpdate } from "../support/telegram-harness.js";
+import { createHarness as harness, getText, messageUpdate } from "../support/telegram-harness.js";
+
+// drafts.ts 的 catch-all 也會回一則訊息（「無法解析這筆輸入」），所以光看
+// 「有沒有回覆」不夠——一個指令被吞掉、落到 catch-all 時一樣會有 calls.length > 0，
+// 測試卻誤判成通過。用這個字串排除掉那個假陽性，才是真的在驗證指令有被自己的
+// handler 接住，而不是被 drafts.ts 攔截。
+const DRAFT_FALLBACK_TEXT = "無法解析這筆輸入";
 
 describe("/help", () => {
   it("leads with what you can type, not with the command list", () => {
@@ -56,6 +62,7 @@ describe("/help", () => {
 
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.at(-1)?.method).toBe("sendMessage");
+    expect(getText(calls.at(-1))).not.toContain(DRAFT_FALLBACK_TEXT);
   });
 });
 
@@ -66,13 +73,17 @@ describe("LEDGER_COMMANDS registration order", () => {
   // 測試：往後任何人加了第九個指令，只要忘記排在正確位置，這裡就會失敗，而不必等到
   // 那個指令自己的測試被寫出來才發現。
   it.each(LEDGER_COMMANDS.map((item) => item.command))(
-    "/%s produces a reply through a fresh bot instance",
+    "/%s is handled by its own registered command, not by the catch-all",
     async (command) => {
       const { bot, calls } = harness();
 
       await bot.handleUpdate(messageUpdate({ updateId: 1, text: `/${command}` }));
 
       expect(calls.length, `/${command} produced no reply at all`).toBeGreaterThan(0);
+      // 只看「有沒有回覆」不夠：drafts.ts 的 catch-all 也會回一則「無法解析這筆輸入」，
+      // 被吞掉的指令一樣會通過 calls.length > 0 這關。必須排除掉那句話，才真的驗證到
+      // 「這個指令有自己的 handler 接住，而不是掉進 catch-all」。
+      expect(getText(calls.at(-1))).not.toContain(DRAFT_FALLBACK_TEXT);
     },
   );
 });
