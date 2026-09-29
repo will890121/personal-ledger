@@ -1,6 +1,7 @@
 import type { AdvanceRow, RecoveryRow } from "../domain/advance.js";
 import type { IncompleteDraft } from "../domain/draft.js";
 import type { ConfirmedTransaction, TransactionDraft } from "../domain/ledger.js";
+import type { OutboxCause, OutboxMessage, OutboxPayload } from "../domain/outbox.js";
 
 export interface InputEventInput {
   readonly eventId: string;
@@ -110,6 +111,21 @@ export interface PendingDraftSummary {
   readonly createdDate: string | null;
 }
 
+/** 帳本變更要連帶寫入的那一則訊息。`render` 在 repository 的 transaction 內被呼叫。 */
+export interface OutboxRequest<T> {
+  readonly messageId: string;
+  readonly cause: OutboxCause;
+  readonly render: (result: T) => OutboxPayload;
+}
+
+export interface OutboxSummary {
+  readonly pending: number;
+  readonly needsAttention: number;
+  readonly oldestPendingAt: string | null;
+  readonly lastDeliveredAt: string | null;
+  readonly stuck: readonly OutboxMessage[];
+}
+
 export interface LedgerRepository {
   recordInputEvent(input: InputEventInput): Promise<{
     created: boolean;
@@ -145,4 +161,15 @@ export interface LedgerRepository {
   listAdvanceRows(ownerId: string): Promise<AdvanceRow[]>;
   listRecoveryRows(ownerId: string): Promise<RecoveryRow[]>;
   countRecoveriesForTransaction(ownerId: string, transactionId: string): Promise<number>;
+  claimDueOutbox(
+    ownerId: string,
+    now: string,
+    leaseUntil: string,
+    limit: number,
+  ): Promise<OutboxMessage[]>;
+  markOutboxDelivered(messageId: string, deliveredAt: string): Promise<void>;
+  markOutboxFailed(messageId: string, nextAttemptAt: string, lastError: string): Promise<void>;
+  markOutboxNeedsAttention(messageId: string, lastError: string): Promise<void>;
+  retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number>;
+  summarizeOutbox(ownerId: string): Promise<OutboxSummary>;
 }

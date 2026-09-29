@@ -9,6 +9,7 @@ import {
   type ConfirmedTransaction,
   type TransactionDraft,
 } from "../domain/ledger.js";
+import { OutboxCauseSchema, type OutboxMessage } from "../domain/outbox.js";
 import type {
   AuditAction,
   AuditEvent,
@@ -20,6 +21,7 @@ import type {
   InputEventInput,
   LedgerRepository,
   LinkTransactionCommand,
+  OutboxSummary,
   PendingDraftSummary,
   PendingQuery,
   PendingStatus,
@@ -109,6 +111,35 @@ interface AuditRow {
   before_json: string | null;
   after_json: string | null;
   created_at: string;
+}
+interface OutboxRow {
+  message_id: string;
+  owner_id: string;
+  cause: string;
+  chat_id: string;
+  target_message_id: string | null;
+  text: string;
+  reply_markup: string | null;
+  status: string;
+  attempts: number;
+  next_attempt_at: string;
+  last_error: string | null;
+}
+
+function toOutboxMessage(row: OutboxRow): OutboxMessage {
+  return {
+    messageId: row.message_id,
+    ownerId: row.owner_id,
+    cause: OutboxCauseSchema.parse(row.cause),
+    chatId: row.chat_id,
+    ...(row.target_message_id ? { targetMessageId: row.target_message_id } : {}),
+    text: row.text,
+    ...(row.reply_markup ? { replyMarkup: row.reply_markup } : {}),
+    status: row.status as OutboxMessage["status"],
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
 }
 
 export class SqliteLedgerRepository implements LedgerRepository {
@@ -727,6 +758,109 @@ export class SqliteLedgerRepository implements LedgerRepository {
       )
       .get(ownerId, transactionId) as { total: number };
     return Promise.resolve(row.total);
+  }
+
+  // 時間一律是 toISOString()：SQLite 做字串比較，格式混用（有的帶毫秒、有的不帶）
+  // 會讓排序錯亂，排程於是永遠不到期或立刻到期。
+  public claimDueOutbox(
+    ownerId: string,
+    now: string,
+    leaseUntil: string,
+    limit: number,
+  ): Promise<OutboxMessage[]> {
+    const claim = this.database.transaction(() => {
+      const rows = this.database
+        .prepare(
+          `SELECT * FROM outbox_messages
+           WHERE owner_id = ? AND status = 'pending' AND next_attempt_at <= ?
+             AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+           ORDER BY next_attempt_at LIMIT ?`,
+        )
+        .all(ownerId, now, now, limit) as OutboxRow[];
+      const lease = this.database.prepare(
+        "UPDATE outbox_messages SET lease_expires_at = ? WHERE message_id = ?",
+      );
+      for (const row of rows) lease.run(leaseUntil, row.message_id);
+      return rows.map((row) => toOutboxMessage(row));
+    });
+    return Promise.resolve(claim.immediate());
+  }
+
+  public markOutboxDelivered(messageId: string, deliveredAt: string): Promise<void> {
+    this.database
+      .prepare(
+        "UPDATE outbox_messages SET status = 'delivered', delivered_at = ?, lease_expires_at = NULL WHERE message_id = ?",
+      )
+      .run(deliveredAt, messageId);
+    return Promise.resolve();
+  }
+
+  public markOutboxFailed(
+    messageId: string,
+    nextAttemptAt: string,
+    lastError: string,
+  ): Promise<void> {
+    // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
+    this.database
+      .prepare(
+        `UPDATE outbox_messages
+         SET attempts = attempts + 1, next_attempt_at = ?, last_error = ?, lease_expires_at = NULL
+         WHERE message_id = ?`,
+      )
+      .run(nextAttemptAt, lastError, messageId);
+    return Promise.resolve();
+  }
+
+  public markOutboxNeedsAttention(messageId: string, lastError: string): Promise<void> {
+    this.database
+      .prepare(
+        "UPDATE outbox_messages SET status = 'needs_attention', last_error = ?, lease_expires_at = NULL WHERE message_id = ?",
+      )
+      .run(lastError, messageId);
+    return Promise.resolve();
+  }
+
+  public retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number> {
+    const result = this.database
+      .prepare(
+        `UPDATE outbox_messages
+         SET status = 'pending', attempts = 0, next_attempt_at = ?, lease_expires_at = NULL
+         WHERE owner_id = ? AND status = 'needs_attention'`,
+      )
+      .run(nextAttemptAt, ownerId);
+    return Promise.resolve(result.changes);
+  }
+
+  public summarizeOutbox(ownerId: string): Promise<OutboxSummary> {
+    const counts = this.database
+      .prepare(
+        `SELECT
+           sum(status = 'pending') AS pending,
+           sum(status = 'needs_attention') AS needs_attention,
+           -- 用 next_attempt_at 而非 created_at：這張表的「等待中」語意是排程時間，
+           -- claimDueOutbox 本身也是照 next_attempt_at 排序取件，兩者要一致。
+           min(CASE WHEN status = 'pending' THEN next_attempt_at END) AS oldest_pending_at,
+           max(delivered_at) AS last_delivered_at
+         FROM outbox_messages WHERE owner_id = ?`,
+      )
+      .get(ownerId) as {
+      pending: number | null;
+      needs_attention: number | null;
+      oldest_pending_at: string | null;
+      last_delivered_at: string | null;
+    };
+    const stuck = this.database
+      .prepare(
+        "SELECT * FROM outbox_messages WHERE owner_id = ? AND status = 'needs_attention' ORDER BY created_at LIMIT 5",
+      )
+      .all(ownerId) as OutboxRow[];
+    return Promise.resolve({
+      pending: counts.pending ?? 0,
+      needsAttention: counts.needs_attention ?? 0,
+      oldestPendingAt: counts.oldest_pending_at,
+      lastDeliveredAt: counts.last_delivered_at,
+      stuck: stuck.map((row) => toOutboxMessage(row)),
+    });
   }
 
   private getDraftSync(draftId: string): TransactionDraft | null {

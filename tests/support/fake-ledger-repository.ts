@@ -6,6 +6,7 @@ import {
   type ConfirmedTransaction,
   type TransactionDraft,
 } from "../../src/domain/ledger.js";
+import type { OutboxCause, OutboxMessage, OutboxStatus } from "../../src/domain/outbox.js";
 import type {
   AuditEvent,
   BatchInput,
@@ -15,11 +16,49 @@ import type {
   DraftSelector,
   InputEventInput,
   LedgerRepository,
+  OutboxSummary,
   PendingDraftSummary,
   PendingQuery,
   PendingStatus,
   UpdateTransactionCommand,
 } from "../../src/ports/ledger-repository.js";
+
+// 內部可變版本：OutboxMessage 對外是 readonly 的投影，lease/created 是 DB 專屬的排程
+// 記帳，不屬於公開型別，所以額外多帶這兩個欄位。與 SqliteLedgerRepository 對齊：
+// lease 未過期就擋住重新取得、失敗要清空 lease 並 attempts+1、重試要把 attempts 歸零。
+interface FakeOutboxMessage {
+  messageId: string;
+  ownerId: string;
+  cause: OutboxCause;
+  chatId: string;
+  targetMessageId?: string;
+  text: string;
+  replyMarkup?: string;
+  status: OutboxStatus;
+  attempts: number;
+  nextAttemptAt: string;
+  leaseExpiresAt: string | null;
+  lastError?: string;
+  // 插入順序，取代 SQLite 版的 created_at：summarizeOutbox 的 stuck 清單要照建立順序排。
+  sequence: number;
+  deliveredAt: string | null;
+}
+
+function toOutboxMessage(row: FakeOutboxMessage): OutboxMessage {
+  return {
+    messageId: row.messageId,
+    ownerId: row.ownerId,
+    cause: row.cause,
+    chatId: row.chatId,
+    ...(row.targetMessageId ? { targetMessageId: row.targetMessageId } : {}),
+    text: row.text,
+    ...(row.replyMarkup ? { replyMarkup: row.replyMarkup } : {}),
+    status: row.status,
+    attempts: row.attempts,
+    nextAttemptAt: row.nextAttemptAt,
+    ...(row.lastError ? { lastError: row.lastError } : {}),
+  };
+}
 
 interface FakeDraftRecord {
   draftId: string;
@@ -42,8 +81,138 @@ export class FakeLedgerRepository implements LedgerRepository {
   public readonly transactions = new Map<string, ConfirmedTransaction>();
   // 依插入順序保存稽核事件，供 listAuditEvents 依 ownerId/transactionId 過濾後回傳。
   public readonly auditEvents: AuditEvent[] = [];
+  public readonly outboxMessages = new Map<string, FakeOutboxMessage>();
   private refCounter = 0;
   private sequence = 0;
+  private outboxSequence = 0;
+
+  /** 測試用種子方法，對應 SQLite 版測試直接 INSERT INTO outbox_messages 的做法。 */
+  public seedOutboxMessage(input: {
+    messageId: string;
+    ownerId: string;
+    cause: OutboxCause;
+    chatId: string;
+    targetMessageId?: string;
+    text: string;
+    replyMarkup?: string;
+    nextAttemptAt: string;
+  }): void {
+    this.outboxSequence += 1;
+    this.outboxMessages.set(input.messageId, {
+      messageId: input.messageId,
+      ownerId: input.ownerId,
+      cause: input.cause,
+      chatId: input.chatId,
+      ...(input.targetMessageId ? { targetMessageId: input.targetMessageId } : {}),
+      text: input.text,
+      ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {}),
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: input.nextAttemptAt,
+      leaseExpiresAt: null,
+      sequence: this.outboxSequence,
+      deliveredAt: null,
+    });
+  }
+
+  public claimDueOutbox(
+    ownerId: string,
+    now: string,
+    leaseUntil: string,
+    limit: number,
+  ): Promise<OutboxMessage[]> {
+    const due = [...this.outboxMessages.values()]
+      .filter(
+        (row) =>
+          row.ownerId === ownerId &&
+          row.status === "pending" &&
+          row.nextAttemptAt <= now &&
+          // lease 未過期就擋住重新取得，語意須與 SqliteLedgerRepository 一致。
+          (row.leaseExpiresAt === null || row.leaseExpiresAt <= now),
+      )
+      .sort((left, right) => left.nextAttemptAt.localeCompare(right.nextAttemptAt))
+      .slice(0, limit);
+    for (const row of due) row.leaseExpiresAt = leaseUntil;
+    return Promise.resolve(due.map((row) => toOutboxMessage(row)));
+  }
+
+  public markOutboxDelivered(messageId: string, deliveredAt: string): Promise<void> {
+    const row = this.outboxMessages.get(messageId);
+    if (row) {
+      row.status = "delivered";
+      row.deliveredAt = deliveredAt;
+      row.leaseExpiresAt = null;
+    }
+    return Promise.resolve();
+  }
+
+  public markOutboxFailed(
+    messageId: string,
+    nextAttemptAt: string,
+    lastError: string,
+  ): Promise<void> {
+    const row = this.outboxMessages.get(messageId);
+    if (row) {
+      // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
+      row.attempts += 1;
+      row.nextAttemptAt = nextAttemptAt;
+      row.lastError = lastError;
+      row.leaseExpiresAt = null;
+    }
+    return Promise.resolve();
+  }
+
+  public markOutboxNeedsAttention(messageId: string, lastError: string): Promise<void> {
+    const row = this.outboxMessages.get(messageId);
+    if (row) {
+      row.status = "needs_attention";
+      row.lastError = lastError;
+      row.leaseExpiresAt = null;
+    }
+    return Promise.resolve();
+  }
+
+  public retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number> {
+    let changed = 0;
+    for (const row of this.outboxMessages.values()) {
+      if (row.ownerId !== ownerId || row.status !== "needs_attention") continue;
+      row.status = "pending";
+      row.attempts = 0;
+      row.nextAttemptAt = nextAttemptAt;
+      row.leaseExpiresAt = null;
+      changed += 1;
+    }
+    return Promise.resolve(changed);
+  }
+
+  public summarizeOutbox(ownerId: string): Promise<OutboxSummary> {
+    const owned = [...this.outboxMessages.values()].filter((row) => row.ownerId === ownerId);
+    const pending = owned.filter((row) => row.status === "pending");
+    const needsAttention = owned.filter((row) => row.status === "needs_attention");
+    const delivered = owned.filter((row) => row.deliveredAt !== null);
+    const oldestPendingAt = pending.reduce<string | null>(
+      (oldest, row) => (oldest === null || row.nextAttemptAt < oldest ? row.nextAttemptAt : oldest),
+      null,
+    );
+    const lastDeliveredAt = delivered.reduce<string | null>(
+      (latest, row) =>
+        row.deliveredAt !== null && (latest === null || row.deliveredAt > latest)
+          ? row.deliveredAt
+          : latest,
+      null,
+    );
+    const stuck = needsAttention
+      .sort((left, right) => left.sequence - right.sequence)
+      .slice(0, 5)
+      .map((row) => toOutboxMessage(row));
+    return Promise.resolve({
+      pending: pending.length,
+      needsAttention: needsAttention.length,
+      oldestPendingAt,
+      lastDeliveredAt,
+      stuck,
+    });
+  }
 
   private nextDraftRef(): string {
     this.refCounter += 1;
