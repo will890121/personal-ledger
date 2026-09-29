@@ -33,25 +33,40 @@ export function firstDraftRef(repository: FakeLedgerRepository): string {
 
 export interface HarnessOptions {
   readonly today?: string;
-  readonly now?: Date;
+  /**
+   * 時鐘取值函式而非固定 Date：outbox 的退避重試需要看到時間真的往前走，
+   * 測試才能在「第一次送失敗」與「之後補送」之間推進時鐘。
+   */
+  readonly now?: () => Date;
   /** 模擬 Telegram 拒絕刪除訊息（例如超過 48 小時）。 */
   readonly failDeleteMessage?: boolean;
+  /**
+   * 模擬 Telegram 送出/編輯訊息失敗（網路中斷、逾時之類），供 outbox 重試相關測試
+   * 使用。回傳的 `deliveryControl` 讓測試在流程中途切換，不必重建整個 harness。
+   */
+  readonly failDelivery?: boolean;
+}
+
+/** 讓測試在草稿確認之後，切換「Telegram 是否還連得上」。 */
+export interface DeliveryControl {
+  failing: boolean;
 }
 
 export function createHarness(options: HarnessOptions = {}) {
   const repository = new FakeLedgerRepository();
   const referenceRepository = new FakeReferenceRepository();
   const calls: ApiCall[] = [];
+  const deliveryControl: DeliveryControl = { failing: options.failDelivery ?? false };
   let nextId = 0;
   let nextMessageId = 0;
-  const bot = createLedgerBot({
+  const { bot, outboxRunner } = createLedgerBot({
     token: "123456:test-token",
     ownerId: "123",
     repository,
     referenceRepository,
     summaryRepository: { summarize: () => Promise.resolve(summarizeAllocations([])) },
     generateId: () => `id-${String(++nextId)}`,
-    now: () => options.now ?? new Date("2026-09-18T01:00:00.000Z"),
+    now: options.now ?? (() => new Date("2026-09-18T01:00:00.000Z")),
     today: () => options.today ?? "2026-09-18",
     botInfo: {
       id: 1,
@@ -71,6 +86,12 @@ export function createHarness(options: HarnessOptions = {}) {
   });
   const capture: Transformer = (_previous, method, payload) => {
     calls.push({ method, payload });
+    // outbox runner 遞送訊息也是走 bot.api（sendMessage／editMessageText），
+    // 在這裡攔下來才能模擬「訊息記了帳但送不出去」而不影響其他呼叫
+    // （例如 answerCallbackQuery 仍應該成功，使用者的按鈕才不會一直轉圈）。
+    if (deliveryControl.failing && (method === "sendMessage" || method === "editMessageText")) {
+      return Promise.reject(new Error("Telegram delivery unavailable"));
+    }
     if (method === "deleteMessage" && options.failDeleteMessage === true) {
       return Promise.reject(new Error("message can't be deleted"));
     }
@@ -88,7 +109,7 @@ export function createHarness(options: HarnessOptions = {}) {
     return Promise.resolve({ ok: true, result: true } as never);
   };
   bot.api.config.use(capture);
-  return { bot, calls, repository, referenceRepository };
+  return { bot, calls, repository, referenceRepository, runner: outboxRunner, deliveryControl };
 }
 
 export function messageUpdate(options: {

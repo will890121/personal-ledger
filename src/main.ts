@@ -14,6 +14,7 @@ import { SqliteLedgerRepository } from "./db/sqlite-ledger-repository.js";
 import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
 import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
 import { createLedgerBot } from "./telegram/create-bot.js";
+import type { OutboxRunner } from "./telegram/outbox-runner.js";
 
 export interface Runtime {
   readonly database: Database.Database;
@@ -21,6 +22,7 @@ export interface Runtime {
   readonly referenceRepository: SqliteReferenceRepository;
   readonly summaryRepository: SqliteSummaryRepository;
   readonly bot: Bot;
+  readonly outboxRunner: OutboxRunner;
   readonly close: () => void;
 }
 
@@ -50,7 +52,7 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
     await bootstrapReferenceData(referenceRepository, config.ownerId);
     const repository = new SqliteLedgerRepository(database);
     const summaryRepository = new SqliteSummaryRepository(database);
-    const bot = createLedgerBot({
+    const { bot, outboxRunner } = createLedgerBot({
       token: config.telegramBotToken,
       ownerId: config.ownerId,
       repository,
@@ -67,6 +69,7 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       referenceRepository,
       summaryRepository,
       bot,
+      outboxRunner,
       close: () => database.close(),
     };
   } catch (error) {
@@ -90,6 +93,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     return;
   }
 
+  // 背景遞送迴圈只在真正跑起來的行程裡啟動：LEDGER_STARTUP_CHECK 探測與測試都只是
+  // 建構 runtime 就結束，不該讓每一次建構都掛一個真的 interval。
+  runtime.outboxRunner.start();
+
   const stop = (): void => {
     void runtime.bot.stop();
   };
@@ -101,6 +108,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
+    runtime.outboxRunner.stop();
     runtime.close();
   }
 }

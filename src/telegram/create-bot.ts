@@ -7,9 +7,28 @@ import { registerDraftHandlers } from "./handlers/drafts.js";
 import { registerPendingHandlers } from "./handlers/pending.js";
 import { registerSummaryHandlers } from "./handlers/summaries.js";
 import { registerTransactionHandlers } from "./handlers/transactions.js";
+import { createOutboxRunner, type OutboxRunner } from "./outbox-runner.js";
 
 export type { LedgerBotDependencies };
 export { formatRecentPage } from "./handlers/transactions.js";
+
+/**
+ * createLedgerBot 的輸入：呼叫端不需要（也不該）自己組出 outboxRunner——它要用的
+ * `bot.api` 得等 Bot 建好才存在。留一個選填的覆寫欄位只是為了讓測試能塞進一個
+ * 用假 api 組出來、可以控制成功/失敗的 runner；正式環境（main.ts）一律用預設值。
+ */
+export type CreateLedgerBotOptions = Omit<LedgerBotDependencies, "outboxRunner"> & {
+  readonly outboxRunner?: OutboxRunner;
+};
+
+export interface LedgerBot {
+  readonly bot: Bot;
+  /**
+   * 背景遞送迴圈。建立時刻意不 start()——測試會不斷建立 bot，每個都掛一個
+   * 真的 interval 只會添亂；何時開始輪詢是應用程式進入點（src/main.ts）的決定。
+   */
+  readonly outboxRunner: OutboxRunner;
+}
 
 // 只保留可以安全寫進正式環境日誌的欄位：更新種類不含任何內容，
 // 更新編號是 Telegram 的流水號，不會洩漏使用者身分。
@@ -49,10 +68,29 @@ function isMessageNotModifiedError(error: unknown): boolean {
   );
 }
 
-export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
+export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot {
   const bot = dependencies.botInfo
     ? new Bot(dependencies.token, { botInfo: dependencies.botInfo })
     : new Bot(dependencies.token);
+
+  // 預設的遞送管道就是這顆 bot 自己的 api：sendMessage／editMessageText 借用
+  // grammY 既有的 HTTP 呼叫，不必另外接一份 Telegram client。onNeedsAttention
+  // 目前是空實作——Task 9 會把它換成 createAttentionNotifier，這裡先卡住介面，
+  // 不在這個任務發明告警行為。
+  const outboxRunner =
+    dependencies.outboxRunner ??
+    createOutboxRunner({
+      repository: dependencies.repository,
+      ownerId: dependencies.ownerId,
+      now: dependencies.now,
+      api: {
+        sendMessage: (chatId, text, options) => bot.api.sendMessage(chatId, text, options),
+        editMessageText: (chatId, messageId, text, options) =>
+          bot.api.editMessageText(chatId, messageId, text, options),
+      },
+      onNeedsAttention: () => Promise.resolve(),
+    });
+  const fullDependencies: LedgerBotDependencies = { ...dependencies, outboxRunner };
 
   // grammy 預設在沒有錯誤處理器時會停止輪詢，任何 handler 的例外都會讓整個 Bot 從此失聯。
   // 這裡把錯誤收斂成「這次操作失敗」，輪詢必須繼續。
@@ -96,11 +134,11 @@ export function createLedgerBot(dependencies: LedgerBotDependencies): Bot {
     await next();
   });
 
-  registerTransactionHandlers(bot, dependencies);
-  registerSummaryHandlers(bot, dependencies);
-  registerPendingHandlers(bot, dependencies);
-  registerAdvanceHandlers(bot, dependencies);
-  registerDraftHandlers(bot, dependencies);
+  registerTransactionHandlers(bot, fullDependencies);
+  registerSummaryHandlers(bot, fullDependencies);
+  registerPendingHandlers(bot, fullDependencies);
+  registerAdvanceHandlers(bot, fullDependencies);
+  registerDraftHandlers(bot, fullDependencies);
 
-  return bot;
+  return { bot, outboxRunner };
 }
