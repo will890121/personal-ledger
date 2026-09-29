@@ -629,15 +629,23 @@ describe("outbox storage", () => {
   });
   afterEach(() => database.close());
 
-  function seed(messageId: string, nextAttemptAt: string, replyMarkup?: string): void {
+  // created_at 必須明寫：欄位的 DEFAULT CURRENT_TIMESTAMP 產生的是
+  // `YYYY-MM-DD HH:MM:SS`，與本專案「所有時間都是 toISOString()」的規則不符，
+  // 而 summarizeOutbox 的 oldestPendingAt 讀的正是 created_at。
+  function seed(
+    messageId: string,
+    nextAttemptAt: string,
+    replyMarkup?: string,
+    createdAt?: string,
+  ): void {
     database
       .prepare(
         `INSERT INTO outbox_messages
            (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
-            status, next_attempt_at)
-         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', ?, 'pending', ?)`,
+            status, next_attempt_at, created_at)
+         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', ?, 'pending', ?, ?)`,
       )
-      .run(messageId, replyMarkup ?? null, nextAttemptAt);
+      .run(messageId, replyMarkup ?? null, nextAttemptAt, createdAt ?? nextAttemptAt);
   }
 
   it("claims only rows that are due and not already leased", async () => {
@@ -708,6 +716,16 @@ describe("outbox storage", () => {
       .prepare("SELECT next_attempt_at FROM outbox_messages WHERE message_id = 'due'")
       .get() as { next_attempt_at: string };
     expect(stored.next_attempt_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it("reports how long the oldest message has been queued, not when it is next due", async () => {
+    // `/status` 的「最舊 N 分鐘前」問的是「卡了多久」＝ created_at。next_attempt_at 是
+    // 「下次何時該送」，正在退避的列那個時間在未來，拿它算會得出負的年齡。
+    seed("retrying", LATER, undefined, NOW);
+
+    await expect(repository.summarizeOutbox("owner-1")).resolves.toMatchObject({
+      oldestPendingAt: NOW,
+    });
   });
 
   it("summarises what /status needs", async () => {
