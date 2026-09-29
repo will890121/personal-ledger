@@ -229,8 +229,14 @@ describe("migration 0008", () => {
         .run(cause, status);
     };
 
-    expect(() => insert("something_else", "pending")).toThrow(/CHECK/);
-    expect(() => insert("transaction_confirmed", "queued")).toThrow(/CHECK/);
+    // arrow 的主體要用大括號包起來：本專案的 eslint 有 no-confusing-void-expression，
+    // 單行 arrow 回傳 void 運算式會被判定為錯誤。
+    expect(() => {
+      insert("something_else", "pending");
+    }).toThrow(/CHECK/);
+    expect(() => {
+      insert("transaction_confirmed", "queued");
+    }).toThrow(/CHECK/);
   });
 
   it("registers version 8 and stays idempotent", () => {
@@ -1762,7 +1768,9 @@ describe("pre-migration snapshot", () => {
     // 讓 migration 失敗：先佔用它要建立的資料表名稱。
     database.exec("CREATE TABLE outbox_messages (nope TEXT)");
 
-    expect(() => migrate(database)).toThrow();
+    expect(() => {
+      migrate(database);
+    }).toThrow();
 
     expect(existsSync(snapshot ?? "")).toBe(true);
     expect(
