@@ -250,6 +250,14 @@ schema 版本：8
 | Migration | 有待套用時產生快照；migration 失敗則啟動中止且快照留著（AC-24） |
 | 指令清單 | `/help` 的指令段落與 `setMyCommands` 的參數都由 `commands.ts` 導出，且涵蓋每一支已註冊的指令（附帶項目） |
 
+## 6c. `/status` 的時刻必須用設定的時區
+
+`/status` 存在的目的是讓人一眼判斷遞送有沒有卡住。以 UTC 呈現時刻會直接摧毀這個用途：
+設定是 `Asia/Taipei` 的使用者看到「最後成功遞送：14:32」而自己的錶是 22:32，會以為卡了
+八小時。`main.ts` 已經有以 `Intl.DateTimeFormat` 實作的 `dateInTimezone`，並以
+`today: () => string` 的形式接進 `LedgerBotDependencies`——時刻用同一條路徑接進去，不需要
+新的機制。
+
 ## 10b. 兩個已知的語意選擇
 
 **超收回收的 cause 是 `recovery_recorded`。** 回收超額時，草稿同時含有 `advance_recovery`

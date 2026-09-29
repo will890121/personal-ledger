@@ -1728,6 +1728,34 @@ describe("/status", () => {
 
     await expect(pendingCount(repository)).resolves.toBe(0);
     await expect(deliveredCount(repository)).resolves.toBe(1);
+    // attempts 必須歸零。既有的 sqlite-outbox 測試 seed 的列本來就是 0，分不出
+    // 「重設為 0」與「原封不動」——審查時把 UPDATE 裡的 attempts = 0 拿掉，整套仍全綠。
+    await expect(attemptsOf(repository, "stuck")).resolves.toBe(0);
+  });
+
+  it("prints the attempt count verbatim and nothing else on the error line", async () => {
+    // 這兩條是本 task 著墨最多的語意，卻也最容易被一個字元改掉：attempts 印成 attempts+1，
+    // 或在錯誤行後面接上訊息內容。審查時實測，兩種改法整套 446 條測試都不會紅。
+    const { bot, calls, repository } = harness();
+    await seedStuck(repository); // attempts: 4、text 內含「已入帳：午餐 120」
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const text = getText(calls.at(-1)) ?? "";
+    expect(text).toContain("已重試 4 次");
+    // 錯誤行只放 Telegram 自己的描述，不得夾帶金額、分類或原文。
+    expect(text).not.toContain("已入帳");
+    expect(text).not.toContain("120");
+  });
+
+  it("shows times in the configured timezone, not UTC", async () => {
+    // /status 的用途是判斷遞送有沒有卡住；差八小時的時間戳會讓使用者以為卡住了。
+    const { bot, calls, repository } = harness(); // 時區固定為 Asia/Taipei
+    await seedDelivered(repository, "2026-09-30T06:32:00.000Z");
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    expect(getText(calls.at(-1))).toContain("14:32");
   });
 
   it("hides the retry button when nothing is stuck", async () => {
