@@ -1404,6 +1404,13 @@ describe("confirming a draft", () => {
     // …建立草稿、按確認…
     expect(getText(calls.at(-1))).toContain("已入帳");
     expect(await outboxStatus(repository)).toBe("delivered");
+    // 必須斷言「只送了一次」。只檢查最後一則訊息的內容與 outbox 狀態的話，一個同時
+    // drainOnce() 又自己 editMessageText() 的 handler 會照樣通過——而「不得有兩個
+    // 送出者」正是這個 task 走 outbox 的全部理由。
+    const deliveries = calls.filter(
+      (call) => call.method === "sendMessage" || call.method === "editMessageText",
+    );
+    expect(deliveries).toHaveLength(1);
   });
 
   it("keeps the transaction and queues the message when delivery throws", async () => {
