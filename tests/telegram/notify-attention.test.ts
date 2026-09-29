@@ -94,4 +94,26 @@ describe("attention notifier", () => {
 
     await expect(notify(stuckMessage())).resolves.toBeUndefined();
   });
+
+  it("does not let a failed alert consume the throttle window", async () => {
+    // 節流的目的是不要洗版使用者；送失敗的通知沒到達使用者，不該吃掉那 10 分鐘。
+    const { notify, api, advance } = harness();
+    api.sendMessage.mockRejectedValueOnce(new Error("network down"));
+    await notify(stuckMessage());
+
+    advance(60_000);
+    await notify(stuckMessage());
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("never puts financial content in the alert", async () => {
+    // 只用 toContain 檢查關鍵句的話，在文案後面加一個金額仍然全綠——審查時實測過。
+    const { notify, api } = harness();
+
+    await notify(stuckMessage());
+
+    const text = api.sendMessage.mock.calls[0]?.[1] as string;
+    expect(text).not.toMatch(/\d/);
+  });
 });
