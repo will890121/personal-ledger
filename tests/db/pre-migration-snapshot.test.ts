@@ -85,7 +85,7 @@ describe("pre-migration snapshot", () => {
 
     const snapshot = takePreMigrationSnapshot(database, directory, 8, new Date());
 
-    expect(snapshot).toMatch(/pre-migration\/8-.*\.sqlite$/);
+    expect(snapshot).toMatch(/pre-migration\/.*-8\.sqlite$/);
     // 快照本身必須是可用的資料庫,否則它不是備份只是檔案。
     const restored = openDatabase(snapshot ?? "");
     databases.push(restored);
@@ -93,6 +93,49 @@ describe("pre-migration snapshot", () => {
     expect(restored.prepare("SELECT max(version) AS v FROM schema_migrations").get()).toEqual({
       v: 7,
     });
+  });
+
+  it("captures data still sitting in the write-ahead log", () => {
+    // VACUUM INTO 存在的全部理由。少了這條,把它換成 copyFileSync 四條原本的測試全綠——
+    // 沒有一條檢查得出來——而複製檔案在 WAL 模式下會漏掉尚未 checkpoint 的已提交資料。
+    const { directory, databasePath } = ledgerAtVersion(7);
+    const database = openDatabase(databasePath);
+    databases.push(database);
+    database.exec("CREATE TABLE wal_probe (id INTEGER PRIMARY KEY)");
+    database.prepare("INSERT INTO wal_probe (id) VALUES (1)").run();
+
+    const snapshot = takePreMigrationSnapshot(database, directory, 8, new Date());
+
+    const restored = openDatabase(snapshot ?? "");
+    databases.push(restored);
+    expect(restored.prepare("SELECT count(*) AS total FROM wal_probe").get()).toEqual({
+      total: 1,
+    });
+  });
+
+  it("keeps the newest snapshot when the target version crosses into two digits", () => {
+    // 版本從個位數升到兩位數時,若把版本放在檔名最前面,字典序會把「10-…」排到
+    // 「9-…」前面;修剪拿排序後最前面的當「最舊」刪掉,結果刪的反而是最新那份。
+    // 這條測試在版本前綴的舊命名法下會失敗,在時間戳前綴的命名法下才會過。
+    const { directory, databasePath } = ledgerAtVersion(7);
+    const database = openDatabase(databasePath);
+    databases.push(database);
+    const folder = join(directory, "pre-migration");
+
+    takePreMigrationSnapshot(database, directory, 9, new Date(Date.UTC(2026, 8, 30, 1, 0)));
+    takePreMigrationSnapshot(database, directory, 9, new Date(Date.UTC(2026, 8, 30, 1, 1)));
+    takePreMigrationSnapshot(database, directory, 9, new Date(Date.UTC(2026, 8, 30, 1, 2)));
+    const newest = takePreMigrationSnapshot(
+      database,
+      directory,
+      10,
+      new Date(Date.UTC(2026, 8, 30, 1, 3)),
+    );
+
+    const files = readdirSync(folder).sort();
+    expect(files).toHaveLength(3);
+    expect(newest).not.toBeNull();
+    expect(existsSync(newest ?? "")).toBe(true);
   });
 
   it("keeps only the three most recent snapshots", () => {

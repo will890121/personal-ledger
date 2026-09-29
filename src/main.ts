@@ -37,19 +37,15 @@ function recordPreMigrationSnapshot(snapshotPath: string | null): void {
 }
 
 export async function composeRuntime(config: AppConfig): Promise<Runtime> {
-  mkdirSync(dirname(resolve(config.databasePath)), { recursive: true });
+  const dataDirectory = dirname(resolve(config.databasePath));
+  mkdirSync(dataDirectory, { recursive: true });
 
   const database = openDatabase(config.databasePath);
   try {
     // 有 migration 待套用時才拍照:失敗後才有東西能還原(AC-24)。用 SCHEMA_VERSION
     // 當檔名裡的目標版本——它本來就是「從 migrations 清單推導出的最新版本」,不必
     // 另外再做一個 latestMigrationVersion() 講同一件事。
-    const snapshot = takePreMigrationSnapshot(
-      database,
-      dirname(resolve(config.databasePath)),
-      SCHEMA_VERSION,
-      new Date(),
-    );
+    const snapshot = takePreMigrationSnapshot(database, dataDirectory, SCHEMA_VERSION, new Date());
     recordPreMigrationSnapshot(snapshot);
     migrate(database);
     const referenceRepository = new SqliteReferenceRepository(database);
