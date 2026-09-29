@@ -164,6 +164,41 @@ describe("outbox runner", () => {
     expect(await attempts(repository, "m1")).toBe(0);
   });
 
+  it("retries normally when the forced resend after a vanished target also fails transiently", async () => {
+    // Fix round 1, Finding 1：resend-as-new 之後的第二次嘗試不是免費的——
+    // 這裡故意讓它也失敗，確認失敗會照一般的 retry 規則計入 attempts。
+    const { runner, api, repository } = harness();
+    api.editMessageText.mockRejectedValueOnce(
+      grammyError(400, "Bad Request: message to edit not found"),
+    );
+    api.sendMessage.mockRejectedValueOnce(grammyError(502, "Bad Gateway"));
+    enqueue(repository, { messageId: "m1", targetMessageId: "77" });
+
+    await runner.drainOnce();
+
+    expect(api.sendMessage).toHaveBeenCalledOnce();
+    expect(await status(repository, "m1")).toBe("pending");
+    expect(await attempts(repository, "m1")).toBe(1);
+  });
+
+  it("gives up when the forced resend after a vanished target also fails permanently", async () => {
+    // Fix round 1, Finding 1：同上，但第二次失敗是 give-up 類錯誤。
+    const { runner, api, repository, onNeedsAttention } = harness();
+    api.editMessageText.mockRejectedValueOnce(
+      grammyError(400, "Bad Request: message to edit not found"),
+    );
+    api.sendMessage.mockRejectedValueOnce(
+      grammyError(403, "Forbidden: bot was blocked by the user"),
+    );
+    enqueue(repository, { messageId: "m1", targetMessageId: "77" });
+
+    await runner.drainOnce();
+
+    expect(api.sendMessage).toHaveBeenCalledOnce();
+    expect(await status(repository, "m1")).toBe("needs_attention");
+    expect(onNeedsAttention).toHaveBeenCalledOnce();
+  });
+
   it("treats an unchanged message as delivered", async () => {
     const { runner, repository } = harness();
     api.editMessageText.mockRejectedValueOnce(
@@ -255,6 +290,10 @@ describe("outbox runner", () => {
     enqueue(repository, { messageId: "m1" });
 
     await runner.drainOnce().catch(() => undefined);
+    // Fix round 1, Finding 2：這裡要卡住的是「行程內立刻重試」這個突變——
+    // 如果 markOutboxDelivered 失敗被吞掉、在同一個 drainOnce() 裡馬上重送，
+    // 這行會在 lease 過期之前就看到第二次呼叫，測試就會抓到。
+    expect(api.sendMessage).toHaveBeenCalledOnce();
     advance(60_000); // lease 過期
     await runner.drainOnce();
 
@@ -283,5 +322,34 @@ describe("outbox runner", () => {
     await Promise.all([runner.drainOnce(), runner.drainOnce()]);
 
     expect(api.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it("start() unrefs its interval so the process can exit on its own; stop() clears it", () => {
+    // Fix round 1, Finding 3：這裡故意不用 vi.useFakeTimers()——那套機制不模擬
+    // ref/unref 的實際行為，用它斷言 unref 會是一個永遠不會失敗的假斷言。改用真正的
+    // setInterval/clearInterval（用 spy 攔截取得真正的 Timeout 控制代碼），直接檢查
+    // Node Timeout 物件的 hasRef()，這是唯一誠實、能被突變測試打中的作法。
+    const { runner } = harness();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+    try {
+      runner.start();
+
+      expect(setIntervalSpy).toHaveBeenCalledOnce();
+      const timerResult = setIntervalSpy.mock.results[0];
+      if (!timerResult || timerResult.type !== "return") {
+        throw new Error("setInterval did not return synchronously");
+      }
+      const timer = timerResult.value;
+      expect(timer.hasRef()).toBe(false);
+
+      runner.stop();
+
+      expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 });

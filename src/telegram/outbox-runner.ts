@@ -104,6 +104,8 @@ async function handleDeliveryFailure(
   if (outcome.kind === "give-up" || outcome.kind === "resend-as-new") {
     // resend-as-new 若在改送新訊息之後仍然發生，理論上不會出現——這次呼叫的是
     // sendMessage 不是 editMessageText——比照 give-up 處理，避免無窮遞迴。
+    // 這個分支目前無法被觸發：故意留著的縱深防禦，不是漏改的死碼；不用花時間找
+    // 一條會走到這裡的路徑。
     await deps.repository.markOutboxNeedsAttention(message.messageId, describeDeliveryError(error));
     await deps.onNeedsAttention(message);
     return "needs_attention";
