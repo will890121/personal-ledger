@@ -89,6 +89,33 @@
 
 通過條件：AC-09 至 AC-14 全部通過，並以至少 20 條匿名化真實輸入建立解析回歸測試集。
 
+### M3 之後的解析器改進（非里程碑）
+
+M3b 結案後做的兩件事，都是從人工驗收與使用者提問長出來的，不屬於任何里程碑，但改動了
+分類模型與 migration，所以記在這裡。設計見
+[`docs/domain/category-model.md`](domain/category-model.md)。
+
+**分類關鍵字對照表**（2026-09-26，migration 0006、測試 321 → 345）
+
+M2 的解析器只認得「午餐」一個關鍵字，其餘句子只要帶得出帳戶就一律預設成午餐 ——
+「早餐 100 現金」「電影 300 國泰卡」「國泰卡刷 1200」全都被靜靜記成午餐，而且欄位齊全、
+連追問都沒有。改成關鍵字對照表（最長優先，商家與帳戶不再暗示分類），對不上就追問。
+同時把「午餐」從第二層分類降為 `subcategory`，葉分類改名為「餐飲」—— 規格書 AC-01 寫的
+本來就是「餐飲草稿」，M2 的命名是實作偏離規格。
+
+驗收紀錄：[`docs/quality/category-keywords-acceptance.md`](quality/category-keywords-acceptance.md)
+
+**使用者自訂分類關鍵字**（2026-09-29，migration 0007、測試 345 → 384）
+
+內建關鍵字表刻意只放餐別與明確品類，所以「一蘭拉麵」「牛排」每次都得手動選分類。
+補完分類後 bot 會問一次「要記住嗎」，答應了就寫進 `user_category_keywords`，下次直接命中；
+`/keywords` 可列出與刪除。原本設計成「商家記憶」，因使用者提問「如果我輸入的是牛排，
+這樣也會變成商家嗎」而改向 —— 殘餘文字偵測分不出店名與品項，把品項寫進 `merchants`
+會污染商家概念。真正的商家登記留在
+[`docs/todo/merchant-registration.md`](todo/merchant-registration.md)。
+
+驗收紀錄：[`docs/quality/user-category-keywords-acceptance.md`](quality/user-category-keywords-acceptance.md)
+
 ### M4：可靠性、工作佇列與可觀測性
 
 交付內容：
@@ -160,6 +187,7 @@
 |---|---|
 | M1 | `README.md`、第一版資料模型及 migration 說明 |
 | M2 | `docs/domain/accounting-model.md` |
+| M3 後 | `docs/domain/category-model.md`、`docs/todo/merchant-registration.md` |
 | M4 | `docs/architecture/system-overview.md`、必要 ADR |
 | M5 | `docs/operations/backup-and-restore.md`、`runbook.md` |
 | M6 | `docs/quality/acceptance-report.md` |
@@ -177,7 +205,12 @@
 
 ## 6. 現在要做的事
 
-1. 執行 M0 與 M1 詳細計畫。
-2. 用第一條垂直切片驗證 Telegram、SQLite、領域邊界及冪等策略。
-3. 根據實作結果回看 v0.2，只有發現矛盾時才更新規格。
-4. M1 通過條件達成後，再為 M2 建立下一份詳細實作計畫。
+M0 至 M3b 全部完成並上線（2026-09-29，schema 7，384 個測試）。下一個里程碑是
+**M4：可靠性、工作佇列與可觀測性**，尚未開始。
+
+在那之前值得注意的兩件事：
+
+1. 備份目前完全是手動的 —— 每次 migration 前手動複製資料卷到 `backups/`，沒有自動化，
+   也沒有做過還原演練。自動快照與還原 CLI 排在 M5，但上面第 5 節的「每週至少執行一次
+   手動 Docker 啟動與資料還原演練」現在就該開始。
+2. `docs/todo/merchant-registration.md` 尚未排入任何里程碑。
