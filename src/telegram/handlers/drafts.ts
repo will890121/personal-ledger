@@ -11,6 +11,9 @@ import { recordRecovery } from "../../application/record-recovery.js";
 import { IncompleteDraftSchema, type ParseField } from "../../domain/draft.js";
 import type { TransactionDraft } from "../../domain/ledger.js";
 import type { DraftRecord } from "../../ports/ledger-repository.js";
+import { createHash } from "node:crypto";
+
+import { normalizeReferenceName } from "../../domain/reference-data.js";
 import { extractResidualKeyword } from "../../parser/residual-text.js";
 import { parseRepayment } from "../../parser/split-share.js";
 import { decodeCallback, encodeCallback } from "../callback-data.js";
@@ -273,6 +276,38 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     );
   });
 
+  const KEYWORDS_MESSAGE_KEY = "keywords_list_message";
+
+  /**
+   * 由關鍵字本身導出的 8 碼短碼，供 callback_data 使用（關鍵字是中文，不能直接放）。
+   * 與 shortAdvanceRef 同一套：確定性雜湊，同一個詞永遠得到同一個短碼，重新整理清單
+   * 不會漂移，而且不會像清單索引那樣「位置還在、意義變了」。
+   */
+  function keywordRef(keyword: string): string {
+    return createHash("sha256").update(normalizeReferenceName(keyword)).digest("hex").slice(0, 8);
+  }
+
+  /**
+   * 關掉上一份關鍵字清單。與 /pending、/advances 同樣的理由：留著舊清單不只是佔位置，
+   * 它的刪除鍵仍然可以按下去。Telegram 只允許刪除 48 小時內的訊息，刪不掉就安靜略過。
+   */
+  async function closePreviousKeywordList(context: Context): Promise<void> {
+    const stored = await dependencies.repository.getSetting(
+      dependencies.ownerId,
+      KEYWORDS_MESSAGE_KEY,
+    );
+    if (!stored) return;
+    const [chatId, messageId] = stored.split(":");
+    if (chatId && messageId) {
+      try {
+        await context.api.deleteMessage(Number(chatId), Number(messageId));
+      } catch {
+        // 已被手動刪除或超過刪除期限，忽略。
+      }
+    }
+    await dependencies.repository.clearSetting(dependencies.ownerId, KEYWORDS_MESSAGE_KEY);
+  }
+
   /**
    * 教過的詞清單。這是「教錯了」唯一的出路：教過的詞會先於任何追問被命中，所以那個詞
    * 再也不會跳出「要記住嗎」，沒有這份清單，一次誤觸就會讓之後每一筆含該詞的交易被
@@ -286,18 +321,31 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
     );
     const items = references.userKeywords.map((item) => ({
       keyword: item.keyword,
+      ref: keywordRef(item.keyword),
       categoryName:
         references.categories.find((category) => category.categoryId === item.categoryId)?.name ??
         "（分類已不存在）",
     }));
     const message = formatKeywordList(items);
-    await context.reply(message.text, {
+    await closePreviousKeywordList(context);
+    const sent = await context.reply(message.text, {
       ...(message.replyMarkup ? { reply_markup: message.replyMarkup } : {}),
     });
+    await dependencies.repository.setSetting(
+      dependencies.ownerId,
+      KEYWORDS_MESSAGE_KEY,
+      `${String(sent.chat.id)}:${String(sent.message_id)}`,
+    );
   }
 
   bot.command("keywords", async (context) => {
     await replyKeywordList(context);
+  });
+
+  bot.callbackQuery("dismiss-keywords", async (context) => {
+    await context.answerCallbackQuery();
+    await context.deleteMessage();
+    await dependencies.repository.clearSetting(dependencies.ownerId, KEYWORDS_MESSAGE_KEY);
   });
 
   bot.callbackQuery(/^kd:/, async (context) => {
@@ -306,12 +354,11 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       await context.answerCallbackQuery({ text: "操作已失效" });
       return;
     }
-    // 索引對應的是「按下按鈕當時」那份清單；期間若有變動就重新列一次，
-    // 不能照著舊索引刪掉別的詞。
+    // 短碼由關鍵字本身導出，所以永遠指向同一個詞；指不到就是那個詞已經不在了。
     const keywords = await dependencies.referenceRepository.listUserCategoryKeywords(
       dependencies.ownerId,
     );
-    const target = keywords[action.index];
+    const target = keywords.find((item) => keywordRef(item.keyword) === action.ref);
     if (!target) {
       await context.answerCallbackQuery({ text: "這個詞已經不在清單裡" });
       await replyKeywordList(context);

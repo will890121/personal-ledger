@@ -196,7 +196,11 @@ export function formatKeywordOffer(
  * 「要記住嗎」——沒有這份清單，一次誤觸就會讓之後每一筆含這個詞的交易都被歸錯分類。
  */
 export function formatKeywordList(
-  keywords: readonly { readonly keyword: string; readonly categoryName: string }[],
+  keywords: readonly {
+    readonly keyword: string;
+    readonly categoryName: string;
+    readonly ref: string;
+  }[],
 ): DraftPrompt {
   if (keywords.length === 0) {
     return { text: "還沒有教過任何詞。解不出分類時，補完分類後就會問你要不要記住。" };
@@ -206,12 +210,17 @@ export function formatKeywordList(
       "\n",
     ),
     replyMarkup: {
-      inline_keyboard: keywords.map((item, index) => [
-        {
-          text: `刪除 ${item.keyword}`,
-          callback_data: encodeCallback({ kind: "delete-keyword", index }),
-        },
-      ]),
+      inline_keyboard: [
+        ...keywords.map((item) => [
+          {
+            text: `刪除 ${item.keyword}`,
+            callback_data: encodeCallback({ kind: "delete-keyword", ref: item.ref }),
+          },
+        ]),
+        // 與 /pending、/advances、/recent 一致：清單訊息最後一列是關閉鍵，
+        // 否則它會一直留在對話裡佔位置。
+        [{ text: "關閉清單", callback_data: "dismiss-keywords" }],
+      ],
     },
   };
 }

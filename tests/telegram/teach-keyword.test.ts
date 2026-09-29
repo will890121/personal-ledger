@@ -170,6 +170,28 @@ describe("/keywords", () => {
     const payload = JSON.stringify(created.calls.at(-1)?.payload);
     expect(payload).toContain('"text":"刪除 牛排"');
     expect(payload).toContain('"text":"刪除 加油站"');
+    // 與 /pending、/advances、/recent 一致：清單訊息最後一列是關閉鍵，否則它會一直
+    // 留在對話裡佔位置。
+    const rows = (
+      created.calls.at(-1)?.payload as { reply_markup: { inline_keyboard: { text: string }[][] } }
+    ).reply_markup.inline_keyboard;
+    expect(rows.at(-1)).toEqual([{ text: "關閉清單", callback_data: "dismiss-keywords" }]);
+  });
+
+  it("closes the list when the close button is pressed", async () => {
+    const created = harness();
+    created.referenceRepository.userCategoryKeywords.push({
+      ownerId: "123",
+      keyword: "牛排",
+      categoryId: "category-dining",
+    });
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "/keywords" }));
+
+    await created.bot.handleUpdate(callbackUpdate({ updateId: 2, data: "dismiss-keywords" }));
+
+    expect(created.calls.at(-1)?.method).toBe("deleteMessage");
+    // 關閉只是收起訊息，不該動到教過的詞。
+    expect(created.referenceRepository.userCategoryKeywords).toHaveLength(1);
   });
 
   it("says so when nothing has been taught yet", async () => {
@@ -199,5 +221,50 @@ describe("/keywords", () => {
     expect(created.referenceRepository.userCategoryKeywords).toEqual([]);
     await created.bot.handleUpdate(messageUpdate({ updateId: 3, text: "牛排 300" }));
     expect(getText(created.calls.at(-1))).toContain("待補分類");
+  });
+  it("keeps only the most recent list", async () => {
+    // 與 /pending、/advances 一致。留著舊清單不只是佔位置：刪除鍵綁著清單內容，
+    // 過期的那份仍然可以按下去。
+    const created = harness();
+    created.referenceRepository.userCategoryKeywords.push({
+      ownerId: "123",
+      keyword: "牛排",
+      categoryId: "category-dining",
+    });
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "/keywords" }));
+    const firstId = created.calls.filter((call) => call.method === "sendMessage").length;
+
+    await created.bot.handleUpdate(messageUpdate({ updateId: 2, text: "/keywords" }));
+
+    const deletions = created.calls.filter((call) => call.method === "deleteMessage");
+    expect(deletions).toHaveLength(1);
+    expect(JSON.stringify(deletions[0]?.payload)).toContain(`"message_id":${String(firstId)}`);
+  });
+
+  it("deletes the word the button named, even if the list has changed since", async () => {
+    // 刪除鍵若帶的是清單索引，前面的詞一被移除，同一個索引就指向別的詞——按下「刪除 丙」
+    // 會靜靜刪掉「丁」。短碼由關鍵字本身導出，永遠指向同一個詞。
+    const created = harness();
+    for (const keyword of ["甲", "乙", "丙", "丁"]) {
+      created.referenceRepository.userCategoryKeywords.push({
+        ownerId: "123",
+        keyword,
+        categoryId: "category-dining",
+      });
+    }
+    await created.bot.handleUpdate(messageUpdate({ updateId: 1, text: "/keywords" }));
+    const payload = JSON.stringify(created.calls.at(-1)?.payload);
+    const third = /"text":"刪除 丙","callback_data":"(kd:[^"]+)"/.exec(payload)?.[1] ?? "";
+    expect(third).not.toBe("");
+
+    // 清單送出之後第一個詞先被移除，索引整個往前挪。
+    created.referenceRepository.userCategoryKeywords.splice(0, 1);
+    await created.bot.handleUpdate(callbackUpdate({ updateId: 2, data: third }));
+
+    expect(created.referenceRepository.userCategoryKeywords.map((item) => item.keyword)).toEqual([
+      "乙",
+      "丁",
+    ]);
+    expect(getText(created.calls.at(-1))).toContain("丙");
   });
 });
