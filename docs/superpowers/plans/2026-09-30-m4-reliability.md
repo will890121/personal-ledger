@@ -481,6 +481,14 @@ describe("classifyDeliveryError", () => {
     ).toEqual({ kind: "retry", retryAfterMs: 12_000 });
   });
 
+  it("retries a 429 that carries no retry_after", () => {
+    // Telegram 不一定會附上 retry_after。少了這個案例，這條分支可以被改成 give-up
+    // 而測試全綠——審查時實測過。
+    expect(classifyDeliveryError(grammyError(429, "Too Many Requests", {}))).toEqual({
+      kind: "retry",
+    });
+  });
+
   it("gives up on errors that retrying cannot fix", () => {
     // 被封鎖、聊天室不存在，重試一百次也一樣。訊息太長同理——那是內容問題不是網路問題。
     expect(classifyDeliveryError(grammyError(403, "Forbidden: bot was blocked by the user"))).toEqual(
