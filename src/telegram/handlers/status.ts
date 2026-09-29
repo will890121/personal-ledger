@@ -6,7 +6,12 @@ import type { DraftPrompt } from "../format-prompt.js";
 
 async function renderStatus(dependencies: LedgerBotDependencies): Promise<DraftPrompt> {
   const summary = await dependencies.repository.summarizeOutbox(dependencies.ownerId);
-  return formatStatus(summary, dependencies.schemaVersion, dependencies.now());
+  return formatStatus(
+    summary,
+    dependencies.schemaVersion,
+    dependencies.now(),
+    dependencies.timeOfDay,
+  );
 }
 
 export function registerStatusHandlers(bot: Bot, dependencies: LedgerBotDependencies): void {

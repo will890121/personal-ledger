@@ -148,9 +148,19 @@ describe("outbox storage", () => {
     });
   });
 
-  it("puts every stuck row back in the queue on request", async () => {
-    seed("stuck", NOW);
-    await repository.markOutboxNeedsAttention("stuck", "Forbidden");
+  it("puts every stuck row back in the queue on request, resetting attempts", async () => {
+    // seed()＋markOutboxNeedsAttention 留下的 attempts 本來就是 0：那樣分不出
+    // 「歸零」跟「原封不動」，審查時把 UPDATE 裡的 attempts = 0 拿掉，整套仍全綠。
+    // 直接插入一列 attempts=4 的 needs_attention，才能真的驗證「歸零」這個字。
+    database
+      .prepare(
+        `INSERT INTO outbox_messages
+           (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
+            status, attempts, next_attempt_at, created_at, last_error)
+         VALUES ('stuck', 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', NULL,
+                 'needs_attention', 4, ?, ?, 'Forbidden')`,
+      )
+      .run(NOW, NOW);
 
     await expect(repository.retryOutboxNeedsAttention("owner-1", LATER)).resolves.toBe(1);
 

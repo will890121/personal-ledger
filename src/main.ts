@@ -15,6 +15,7 @@ import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
 import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
 import { createLedgerBot } from "./telegram/create-bot.js";
 import type { OutboxRunner } from "./telegram/outbox-runner.js";
+import { dateInTimezone, timeOfDayInTimezone } from "./timezone.js";
 
 export interface Runtime {
   readonly database: Database.Database;
@@ -24,22 +25,6 @@ export interface Runtime {
   readonly bot: Bot;
   readonly outboxRunner: OutboxRunner;
   readonly close: () => void;
-}
-
-function dateInTimezone(date: Date, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const { year, month, day } = values;
-  if (!year || !month || !day) {
-    throw new Error(`Unable to format date in timezone: ${timezone}`);
-  }
-
-  return `${year}-${month}-${day}`;
 }
 
 export async function composeRuntime(config: AppConfig): Promise<Runtime> {
@@ -61,6 +46,7 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       generateId: randomUUID,
       now: () => new Date(),
       today: () => dateInTimezone(new Date(), config.timezone),
+      timeOfDay: (at) => timeOfDayInTimezone(at, config.timezone),
       schemaVersion: SCHEMA_VERSION,
     });
 

@@ -14,20 +14,17 @@ const causeLabels: Record<OutboxCause, string> = {
   transaction_deleted: "刪除交易",
 };
 
-// 所有時間都以 toISOString() 存成 UTC；telegram 層目前沒有時區可用
-// （config.timezone 只在 main.ts 算「今天日期」時用過，沒有一路傳進來），
-// 與其假裝有時區而弄錯，不如老實顯示 UTC 的時分。
-function hhmm(iso: string): string {
-  return iso.slice(11, 16);
-}
-
 function minutesAgo(iso: string, now: Date): number {
   return Math.max(0, Math.round((now.getTime() - Date.parse(iso)) / 60_000));
 }
 
-function stuckLines(stuck: readonly OutboxMessage[]): string[] {
+function stuckLines(stuck: readonly OutboxMessage[], timeOfDay: (at: Date) => string): string[] {
   return stuck.flatMap((message) => {
-    const header = `⚠️ ${causeLabels[message.cause]} · ${hhmm(message.nextAttemptAt)} · 已重試 ${String(message.attempts)} 次`;
+    // nextAttemptAt 不是「放棄的那一刻」的精確時間戳：markOutboxNeedsAttention 不會
+    // 更新它，這裡讀到的是放棄之前最後一次被排定重試的時間。OutboxMessage 上沒有
+    // createdAt 可用（見 domain/outbox.ts 與 ports/ledger-repository.ts 的說明），
+    // 這是目前拿得到、最接近「放棄時刻」的替代值，讀者不該把它當成精確時間戳。
+    const header = `⚠️ ${causeLabels[message.cause]} · ${timeOfDay(new Date(message.nextAttemptAt))} · 已重試 ${String(message.attempts)} 次`;
     // 只印 Telegram 自己回的 description，絕不印訊息內文、金額或分類名稱——
     // 那些是財務資料，不該出現在告警或狀態畫面裡。
     return message.lastError ? [header, `   ${message.lastError}`] : [header];
@@ -35,22 +32,29 @@ function stuckLines(stuck: readonly OutboxMessage[]): string[] {
 }
 
 /**
- * 純函式：不碰 repository、不碰時鐘（除了呼叫端傳進來的 now）。
- * `now` 是額外加的第三個參數——summary 裡的時間都是絕對值（ISO 字串），
- * 「幾分鐘前」這種相對敘述離不開「現在是幾點」，沒有它就只能印絕對時間，
- * 資訊量會變少，因此在原訂介面之外加了這個參數。
+ * 純函式：不碰 repository、不碰時鐘、不碰時區——`now` 與 `timeOfDay` 都由呼叫端
+ * （telegram/handlers/status.ts）從 dependencies 帶進來。
+ * `now` 是額外加的第三個參數：summary 裡的時間都是絕對值（ISO 字串），
+ * 「幾分鐘前」這種相對敘述離不開「現在是幾點」，原訂介面沒有這個參數就只能印絕對
+ * 時間，資訊量會變少。
+ * `timeOfDay` 同理是第四個參數：把 ISO 時刻換算成「幾點幾分」需要知道使用者設定的
+ * 時區，而這個模組不該自己認得時區是什麼——認錯或漏接時區的後果，是一則八小時前
+ * 就送達的訊息被讀成「還在等」，這正是 /status 要防止的誤判。
  */
 export function formatStatus(
   summary: OutboxSummary,
   schemaVersion: number,
   now: Date,
+  timeOfDay: (at: Date) => string,
 ): DraftPrompt {
   const oldestSuffix =
     summary.pending > 0 && summary.oldestPendingAt
       ? `（最舊 ${String(minutesAgo(summary.oldestPendingAt, now))} 分鐘前）`
       : "";
   const attentionSuffix = summary.needsAttention > 0 ? " ⚠️" : "";
-  const lastDelivered = summary.lastDeliveredAt ? hhmm(summary.lastDeliveredAt) : "從未";
+  const lastDelivered = summary.lastDeliveredAt
+    ? timeOfDay(new Date(summary.lastDeliveredAt))
+    : "從未";
 
   const lines = [
     `待送 ${String(summary.pending)} 筆${oldestSuffix}`,
@@ -59,7 +63,7 @@ export function formatStatus(
     `schema 版本：${String(schemaVersion)}`,
   ];
   if (summary.stuck.length > 0) {
-    lines.push("", ...stuckLines(summary.stuck));
+    lines.push("", ...stuckLines(summary.stuck, timeOfDay));
   }
 
   const keyboard: InlineKeyboardButton[][] = [

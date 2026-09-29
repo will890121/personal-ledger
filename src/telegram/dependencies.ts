@@ -14,6 +14,11 @@ export interface LedgerBotDependencies {
   readonly generateId: () => string;
   readonly now: () => Date;
   readonly today: () => string;
+  /**
+   * /status 顯示「幾點幾分」用；由呼叫端（main.ts／測試 harness）依設定的時區算出，
+   * 這一層本身不知道時區是什麼，只負責把時刻交給它。
+   */
+  readonly timeOfDay: (at: Date) => string;
   readonly botInfo?: UserFromGetMe;
   /**
    * 確認之後真正把訊息送出去的那個 runner；handler 只負責 enqueue 與提交後立刻

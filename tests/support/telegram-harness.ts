@@ -4,6 +4,7 @@ import type { Update } from "grammy/types";
 import { createLedgerBot } from "../../src/telegram/create-bot.js";
 import { SCHEMA_VERSION } from "../../src/db/migrate.js";
 import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
+import { timeOfDayInTimezone } from "../../src/timezone.js";
 import { FakeLedgerRepository } from "./fake-ledger-repository.js";
 import { FakeReferenceRepository } from "./fake-reference-repository.js";
 
@@ -69,6 +70,9 @@ export function createHarness(options: HarnessOptions = {}) {
     generateId: () => `id-${String(++nextId)}`,
     now: options.now ?? (() => new Date("2026-09-18T01:00:00.000Z")),
     today: () => options.today ?? "2026-09-18",
+    // 固定用 Asia/Taipei：正式環境設定的就是這個時區，/status 的時區測試需要一個
+    // 真的與 UTC 有偏移的時區，才能把「忘記轉時區、直接印 UTC」這種退步抓出來。
+    timeOfDay: (at) => timeOfDayInTimezone(at, "Asia/Taipei"),
     schemaVersion: SCHEMA_VERSION,
     botInfo: {
       id: 1,
