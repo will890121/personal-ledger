@@ -19,15 +19,28 @@ const DENYLISTED_FIELDS: ReadonlySet<string> = new Set([
   "telegramBotToken",
 ]);
 
-// Telegram bot token 的樣式：一串數字、冒號、後面接一長串 base64url 字元。
+// Telegram bot token 的樣式：一串數字、冒號、後面接一長串 base64url 字元
+// （真正的 token 祕密部分是 35 碼，且會用到 "_" 和 "-"，不是單純英數字）。
 // 就算 token 沒有被放進上面那份拒絕清單裡的欄位（例如夾在某個 URL 字串裡），
 // 這條規則也要能抓到它——欄位名黑名單和值樣式偵測缺一不可。
 const BOT_TOKEN_PATTERN = /\d{6,}:[A-Za-z0-9_-]{30,}/g;
 
-// owner id 要能把同一位使用者的兩筆日誌關聯起來，所以不能整個丟掉；
-// 但 id 本身沒有記錄的必要，因此換成雜湊值的前 8 碼。
-function hashOwnerId(ownerId: string): string {
-  return createHash("sha256").update(ownerId).digest("hex").slice(0, 8);
+// 這個 bot 只服務一個白名單使用者、且只在私訊裡運作，所以「聊天室 id」跟
+// 「使用者 id」是同一個數字——只認 ownerId 這個鍵名的話，任何以 chatId 之類
+// 別的鍵名記錄同一個 id 的呼叫端都會把它原封不動印出來。約定：任何代表
+// owner 身分的值都要記在這兩個鍵名之一，這裡才會把它雜湊。
+const OWNER_IDENTIFYING_FIELDS: ReadonlySet<string> = new Set(["ownerId", "chatId"]);
+
+// 遞迴深度上限：grammY 的 Update 物件實際巢狀深度通常不到 5 層，這裡抓 8 層
+// 留一點餘裕，同時擋住刻意或意外做出來的超深物件把呼叫堆疊耗光。超過上限的
+// 分支不再往下看，直接換成一個明確的佔位字串，而不是原樣印出來。
+const MAX_REDACTION_DEPTH = 8;
+
+// owner id／chat id 要能把同一位使用者的兩筆日誌關聯起來，所以不能整個丟掉；
+// 但 id 本身沒有記錄的必要，因此換成雜湊值的前 8 碼。型別可能是字串也可能是
+// 數字（例如 grammY 的 chat.id 是 number），一律先轉成字串再雜湊。
+function hashOwnerIdentifier(value: string | number): string {
+  return createHash("sha256").update(String(value)).digest("hex").slice(0, 8);
 }
 
 function redactString(value: string): string {
@@ -53,21 +66,58 @@ function describeError(error: unknown): {
   return { name: error.name };
 }
 
-function redactFields(fields: Record<string, unknown>): Record<string, unknown> {
+// 「單一出口負責遮罩」的意義，就在於呼叫端不必自己先把物件攤平成一份安全的
+// 子集。只處理頂層欄位的話，這個保證只在「每個未來的呼叫端都記得先攤平」時
+// 成立——而 grammY 的 Update 物件天生深度巢狀，`{ update: ctx.update }` 正是
+// 日後有人除錯 handler 時最可能順手寫下的一行，因此欄位名黑名單、owner id
+// 雜湊、bot token 樣式偵測都要在每一層都重新套用一次，不只套在最外層。
+//
+// ancestors 記錄「目前這條路徑上」已經走過的物件／陣列（進入時加入、離開時
+// 移除），只用來擋真正的循環參照；同一個物件被兩個不同分支各自引用一次
+// （非循環）不會被誤判。
+function redactValue(value: unknown, depth: number, ancestors: Set<object>): unknown {
+  if (typeof value === "string") return redactString(value);
+  if (value === null || typeof value !== "object") return value;
+  if (depth > MAX_REDACTION_DEPTH) return "[redacted: max depth reached]";
+  if (ancestors.has(value)) return "[redacted: circular reference]";
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => redactValue(item, depth + 1, ancestors));
+    }
+    return redactObjectFields(value as Record<string, unknown>, depth, ancestors);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function redactObjectFields(
+  fields: Record<string, unknown>,
+  depth: number,
+  ancestors: Set<object>,
+): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(fields)) {
     if (DENYLISTED_FIELDS.has(key)) continue;
-    if (key === "ownerId" && typeof value === "string") {
-      redacted[key] = hashOwnerId(value);
+    if (
+      OWNER_IDENTIFYING_FIELDS.has(key) &&
+      (typeof value === "string" || typeof value === "number")
+    ) {
+      redacted[key] = hashOwnerIdentifier(value);
       continue;
     }
     if (key === "error") {
       redacted[key] = describeError(value);
       continue;
     }
-    redacted[key] = typeof value === "string" ? redactString(value) : value;
+    redacted[key] = redactValue(value, depth + 1, ancestors);
   }
   return redacted;
+}
+
+function redactFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return redactObjectFields(fields, 0, new Set());
 }
 
 function write(level: Level, message: string, fields?: Record<string, unknown>): void {

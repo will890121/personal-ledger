@@ -38,11 +38,15 @@ describe("logger", () => {
     // brief 裡示範用的 "AAExampleToken" 只有 14 碼,比 token 樣式規則要求的
     // 30 碼還短,套用規則根本不會命中;這裡改用長度貼近真實 bot token
     // （Telegram 的祕密部分實際上是 35 碼）的假字串,才是名副其實的測試。
+    // 字串裡刻意混入 "_" 和 "-"（真實 token 用的是 base64url 字元集），
+    // 而且被這兩個符號截斷後每一段英數字都不到 30 碼——這樣如果哪天有人把
+    // 字元類別從 [A-Za-z0-9_-] 誤改窄成 [A-Za-z0-9]，規則會完全比對不到，
+    // 完整字串就會被印出來，這個測試才抓得到（Minor 5）。
     logger.error("呼叫失敗", {
-      url: "https://api.telegram.org/bot123456789:AAHexampleFakeBotTokenForRedactionTest12/sendMessage",
+      url: "https://api.telegram.org/bot123456789:AAHexampleFakeToken_ForRedactionTestOnly12-End/sendMessage",
     });
 
-    expect(lines.join("\n")).not.toContain("AAHexampleFakeBotTokenForRedactionTest12");
+    expect(lines.join("\n")).not.toContain("AAHexampleFakeToken_ForRedactionTestOnly12-End");
     expect(lines.join("\n")).toContain("***");
   });
 
@@ -85,5 +89,96 @@ describe("logger", () => {
     logger.error("遞送失敗", { error: grammyError(400, "Bad Request: message is not modified") });
 
     expect(lines.join("\n")).toContain("message is not modified");
+  });
+
+  // Finding 1：拒絕清單裡的六個欄位名各自獨立測試——用同一個 Set.has() 實作
+  // 不代表每個名字都真的被蓋到；拿掉清單裡任何一個名字，都要有一個測試因此
+  // 失敗，而不是只有 rawText 被測到、其他五個名字形同虛設。
+  const DENYLISTED_FIELD_NAMES = [
+    "rawText",
+    "rawInputSnapshot",
+    "text",
+    "note",
+    "token",
+    "telegramBotToken",
+  ] as const;
+
+  it.each(DENYLISTED_FIELD_NAMES)("drops the %s field entirely, on its own", (field) => {
+    const { logger, lines } = capture();
+
+    logger.error("x", { [field]: "sentinel-value-must-not-appear" });
+
+    expect(lines.join("\n")).not.toContain("sentinel-value-must-not-appear");
+  });
+
+  // Finding 2：遮罩必須遞迴。以下三個測試逐字重現 review 回報的三個探測，
+  // 都是呼叫端把整包物件（例如 grammY 的 Update）原封不動塞進欄位值，而不是
+  // 自己先攤平——這正是「單一出口負責遮罩」要保證的情境。
+  describe("recursive redaction (Finding 2)", () => {
+    it("drops denylisted field names nested inside an object", () => {
+      const { logger, lines } = capture();
+
+      logger.error("x", { update: { message: { text: "午餐 120" } } });
+
+      expect(lines.join("\n")).not.toContain("午餐 120");
+    });
+
+    it("redacts a bot-token-shaped value nested inside an object", () => {
+      const { logger, lines } = capture();
+
+      logger.error("x", {
+        context: {
+          url: "https://api.telegram.org/bot123456789:AAHexampleFakeToken_ForRedactionTestOnly12-End/sendMessage",
+        },
+      });
+
+      const output = lines.join("\n");
+      expect(output).not.toContain("AAHexampleFakeToken_ForRedactionTestOnly12-End");
+      expect(output).toContain("***");
+    });
+
+    it("drops denylisted field names nested inside array elements", () => {
+      const { logger, lines } = capture();
+
+      logger.error("x", { drafts: [{ rawText: "午餐 1260" }] });
+
+      expect(lines.join("\n")).not.toContain("午餐 1260");
+    });
+
+    it("does not throw on a self-referencing object (cycle guard)", () => {
+      const { logger, lines } = capture();
+      const cyclic: Record<string, unknown> = { name: "draft" };
+      cyclic.self = cyclic;
+
+      expect(() => {
+        logger.error("x", { context: cyclic });
+      }).not.toThrow();
+      expect(lines.join("\n")).toContain("circular reference");
+    });
+  });
+
+  // Finding 3 / Minor 4：owner 的識別碼不管記在 ownerId 或 chatId 底下、
+  // 不管型別是字串還是數字，都要走同一條雜湊路徑。
+  describe("owner-identifying fields (Finding 3, Minor 4)", () => {
+    it("hashes chatId the same way as ownerId", () => {
+      const { logger, lines } = capture();
+
+      logger.info("x", { chatId: "729367170" });
+
+      expect(lines.join("\n")).not.toContain("729367170");
+      expect(lines.join("\n")).toMatch(/[0-9a-f]{8}/);
+    });
+
+    it.each(["ownerId", "chatId"] as const)(
+      "hashes a numeric %s instead of printing it verbatim",
+      (field) => {
+        const { logger, lines } = capture();
+
+        logger.info("x", { [field]: 729367170 });
+
+        expect(lines.join("\n")).not.toContain("729367170");
+        expect(lines.join("\n")).toMatch(/[0-9a-f]{8}/);
+      },
+    );
   });
 });
