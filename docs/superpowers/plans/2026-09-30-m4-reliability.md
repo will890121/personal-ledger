@@ -1724,9 +1724,14 @@ Expected: FAIL，`/status` 未註冊
 最後成功遞送：14:32
 schema 版本：8
 
-⚠️ 確認交易 · 14:05 · 已重試 5 次
+⚠️ 確認交易 · 14:05 · 已重試 4 次
    Telegram 回應 403
 ```
+
+**「已重試 N 次」直接印 `attempts`，不要加一。** `markOutboxNeedsAttention` 不會動
+`attempts`（只有 `markOutboxFailed` 會），所以用盡上限而放棄的列停在 4：第一次送出不是
+重試，之後排了 4 次重試，總共送了 5 次。印 `attempts` 剛好就是「重試了幾次」。立刻放棄
+的列（403、訊息過長）`attempts` 是 0，讀起來也正確：沒有重試過。
 
 按鈕：有 `needs_attention` 才出現 `[重試全部]`；最後一列固定 `[關閉清單]`，callback
 `dismiss-status`，與其他清單指令一致。`outbox-retry` 呼叫 `retryOutboxNeedsAttention`
