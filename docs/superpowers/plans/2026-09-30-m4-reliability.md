@@ -2114,7 +2114,7 @@ describe("/help", () => {
   it("registers the same list with Telegram so the / menu shows it", async () => {
     const { bot, calls } = harness();
 
-    await startBot(bot);
+    await registerCommandMenu(bot);
 
     const call = calls.find((item) => item.method === "setMyCommands");
     expect(call).toBeDefined();
