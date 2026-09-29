@@ -28,6 +28,7 @@ describe("M2 accounting core migration", () => {
       { version: 5 },
       { version: 6 },
       { version: 7 },
+      { version: 8 },
     ]);
     expect(
       database
