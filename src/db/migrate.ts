@@ -22,6 +22,24 @@ export const SCHEMA_VERSION = migrations.reduce(
   0,
 );
 
+// migration 前要不要拍快照，取決於還有沒有版本沒套用到這個資料庫。schema_migrations
+// 表不存在代表全新資料庫，沒有東西需要保護，回傳空陣列而不是拋錯或視為「全部待套用」。
+export function pendingMigrationVersions(database: Database.Database): number[] {
+  const migrationsTableExists = database
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
+    .get();
+  if (!migrationsTableExists) return [];
+
+  const appliedVersions = new Set(
+    (database.prepare("SELECT version FROM schema_migrations").all() as { version: number }[]).map(
+      (row) => row.version,
+    ),
+  );
+  return migrations
+    .filter((migration) => !appliedVersions.has(migration.version))
+    .map((migration) => migration.version);
+}
+
 export function migrate(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
