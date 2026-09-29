@@ -1051,9 +1051,17 @@ describe("confirmDraft writes the ledger change and its message together", () =>
 
   it("leaves no message behind when the ledger write fails", async () => {
     // 原子性的另一半：交易沒成立就不該有待送訊息。
-    await expect(
-      repository.confirmDraft("draft-missing", "2026-09-30T01:01:00.000Z", "audit-2", outbox("outbox-2")),
-    ).rejects.toThrow(/draft not found/);
+    // confirmDraft 是同步拋出（better-sqlite3 的 .immediate() 直接 rethrow，不是回傳被
+    // reject 的 Promise），因此用 expect(() => ...).toThrow 而不是 rejects.toThrow——
+    // 與 sqlite-advances.test.ts 既有的慣例一致。
+    expect(() => {
+      void repository.confirmDraft(
+        "draft-missing",
+        "2026-09-30T01:01:00.000Z",
+        "audit-2",
+        outbox("outbox-2"),
+      );
+    }).toThrow(/draft not found/);
 
     expect(database.prepare("SELECT count(*) AS total FROM outbox_messages").get()).toEqual({
       total: 0,
@@ -1468,6 +1476,12 @@ git commit -m "feat: route the confirmation message through the outbox"
 - Modify: `src/application/record-recovery.ts`、`src/application/abandon-advance.ts`、`src/application/mutate-transaction.ts`
 - Modify: `src/telegram/handlers/advances.ts`、`src/telegram/handlers/transactions.ts`
 - Test: `tests/telegram/outbox-coverage.test.ts`（新）
+
+**另外要處理：`transactions.ts` 的退款確認路徑。** 該檔案有第二個 `confirmDraft` 呼叫
+（退款流程的確認鍵）。Task 5 讓 outbox 參數變成必填之後，它會寫入一列 outbox，但仍然
+自己 `editMessageText` —— runner 上線後同一則訊息會送兩次。照 Task 7 對 drafts.ts 的
+同一個原則處理：移除 handler 自己的 `editMessageText`，訊息一律由 runner 送出，否則
+「已送出」會有兩個真相來源。
 
 **Interfaces:**
 - Consumes: Task 5 建立的 `OutboxRequest<T>` 模式
