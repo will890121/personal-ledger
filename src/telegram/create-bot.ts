@@ -1,6 +1,7 @@
 import { Bot, GrammyError } from "grammy";
 import type { Update } from "grammy/types";
 
+import { logger } from "../logger.js";
 import type { LedgerBotDependencies } from "./dependencies.js";
 import { registerAdvanceHandlers } from "./handlers/advances.js";
 import { registerDraftHandlers } from "./handlers/drafts.js";
@@ -38,25 +39,6 @@ function describeUpdate(update: Update): string {
   if (update.callback_query) return "callback_query";
   if (update.message) return "message";
   return "other";
-}
-
-// 錯誤訊息可能夾帶 SQL 片段（SqliteError）或使用者輸入的財務原文（ZodError 會回填實際值），
-// 因此預設只記錄錯誤類別名稱；只有本專案自己以固定字串丟出的 Error 才連訊息一起記錄。
-// GrammyError 是例外：error_code 與 description 是 Telegram Bot API 回傳的錯誤描述
-// （例如 "Bad Request: message is not modified"），不含使用者輸入或財務資料，
-// 記錄它們才診斷得出是哪一種 Telegram 呼叫失敗，而不是只看到一個籠統的類別名稱。
-function describeError(error: unknown): {
-  readonly name: string;
-  readonly message?: string;
-  readonly errorCode?: number;
-  readonly description?: string;
-} {
-  if (error instanceof GrammyError) {
-    return { name: error.name, errorCode: error.error_code, description: error.description };
-  }
-  if (!(error instanceof Error)) return { name: "UnknownError" };
-  if (error.name === "Error") return { name: error.name, message: error.message };
-  return { name: error.name };
 }
 
 // Telegram 在新舊訊息內容與按鈕完全相同時會拒絕 editMessageText，回傳這個特定錯誤。
@@ -109,17 +91,20 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
     // Telegram 因此拒絕更新。這不是「這次操作失敗」，不能用同一套錯誤處理，
     // 否則使用者會被一則無關的「操作失敗，請稍後再試」誤導。
     if (isMessageNotModifiedError(error.error)) {
-      console.debug("Ledger Bot skipped a no-op message edit", {
+      // 這不是錯誤，只是良性的跳過，所以用 info 而非 error 層級記錄。
+      logger.info("Ledger Bot skipped a no-op message edit", {
         updateId: error.ctx.update.update_id,
         updateKind: describeUpdate(error.ctx.update),
       });
       return;
     }
 
-    console.error("Ledger Bot handler failed", {
+    // 原始 error 物件交給 logger 內部的 describeError 處理，這裡不再自己拆解，
+    // 才不會有兩份判斷邏輯各自演化、彼此不一致。
+    logger.error("Ledger Bot handler failed", {
       updateId: error.ctx.update.update_id,
       updateKind: describeUpdate(error.ctx.update),
-      ...describeError(error.error),
+      error: error.error,
     });
     // 回答 callback query 讓 Telegram 端停止轉圈；這個回覆本身失敗也不能再往外拋，
     // 否則錯誤處理器的例外會繞過 grammy 的保護，重新讓 Bot 停止。
@@ -127,7 +112,7 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
       try {
         await error.ctx.answerCallbackQuery({ text: "操作失敗，請稍後再試" });
       } catch {
-        console.error("Ledger Bot could not answer a failed callback query", {
+        logger.error("Ledger Bot could not answer a failed callback query", {
           updateId: error.ctx.update.update_id,
         });
       }

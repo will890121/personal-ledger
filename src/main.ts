@@ -14,6 +14,7 @@ import { takePreMigrationSnapshot } from "./db/pre-migration-snapshot.js";
 import { SqliteLedgerRepository } from "./db/sqlite-ledger-repository.js";
 import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
 import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
+import { logger } from "./logger.js";
 import { createLedgerBot } from "./telegram/create-bot.js";
 import type { OutboxRunner } from "./telegram/outbox-runner.js";
 import { dateInTimezone, timeOfDayInTimezone } from "./timezone.js";
@@ -28,12 +29,11 @@ export interface Runtime {
   readonly close: () => void;
 }
 
-// 下一個 task 會接上不外洩機敏資料的 logger,以及禁用 console.* 的 no-console 規則。
-// 這個函式是刻意留的掛勾:等 logger 進來後,把裡面換成
-// logger.info("migration 前已建立快照", { snapshot: snapshotPath }) 就好,
-// 不需要現在塞 console.info 讓下一個 task 要拆掉。
+// migration 失敗時，快照路徑是唯一能讓人手動還原的線索，所以一定要記下來；
+// 沒有拍照（代表沒有待套用的 migration）就沒有東西可記。
 function recordPreMigrationSnapshot(snapshotPath: string | null): void {
   if (snapshotPath === null) return;
+  logger.info("migration 前已建立快照", { snapshot: snapshotPath });
 }
 
 export async function composeRuntime(config: AppConfig): Promise<Runtime> {
@@ -50,10 +50,6 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       SCHEMA_VERSION,
       new Date(),
     );
-    // 下一個 task 會加上不外洩機敏資料的 logger,以及禁用 console.* 的 no-console 規則。
-    // 快照路徑目前沒有地方能安全印出來,先留一個掛勾;等 logger 進來後,把這裡換成
-    // logger.info("migration 前已建立快照", { snapshot }) 即可,不要現在塞 console.info
-    // 讓下一個 task 要拆掉。
     recordPreMigrationSnapshot(snapshot);
     migrate(database);
     const referenceRepository = new SqliteReferenceRepository(database);
@@ -92,7 +88,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   const config = loadConfig(env);
   const runtime = await composeRuntime(config);
 
-  console.info("Ledger Bot runtime ready", {
+  logger.info("Ledger Bot runtime ready", {
     databasePath: config.databasePath,
     timezone: config.timezone,
     currency: config.currency,
@@ -126,7 +122,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
 const entrypoint = process.argv[1];
 if (entrypoint && resolve(entrypoint) === fileURLToPath(import.meta.url)) {
   void main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : "Ledger Bot failed to start");
+    // 原本直接印 error.message：對本專案自己丟出的固定字串 Error 沒問題，
+    // 但换成 SqliteError／ZodError 時 message 會夾帶 SQL 或使用者輸入。
+    // 交給 logger 的 error 欄位，遮罩規則跟其他錯誤日誌一致。
+    logger.error("Ledger Bot failed to start", { error });
     process.exitCode = 1;
   });
 }
