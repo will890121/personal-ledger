@@ -50,7 +50,12 @@ docker run --rm \
       echo "integrity_check 失敗：$result" >&2
       exit 1
     fi
-    printf "%s" "$(sqlite3 -readonly "/out/$DB_NAME" "SELECT max(version) FROM schema_migrations")" > /out/.schema
+    # schema 版本只是成功訊息裡的欄位，讀不到不該讓備份失敗——快照本身已經過上面的
+    # integrity_check。但也不能靜靜留白：這個內層 sh -c 沒有 set -e，查詢失敗會被吞掉，
+    # 成功訊息就會印出「schema 、」這種空洞而沒人看得出發生了什麼。查不到就明確寫 unknown。
+    schema=$(sqlite3 -readonly "/out/$DB_NAME" "SELECT max(version) FROM schema_migrations" 2>/dev/null || true)
+    [ -n "$schema" ] || schema=unknown
+    printf "%s" "$schema" > /out/.schema
   '
 
 SCHEMA="$(cat "$DEST/.schema")"
@@ -58,7 +63,8 @@ rm -f "$DEST/.schema"
 trap - EXIT
 # 變數後面緊接著全形字元時一律用大括號界定：bash 3.2 在非 UTF-8 locale 下會把多位元組
 # 字元的首個位元組併進變數名，變成 unbound variable。
-SIZE="$(du -h "$DEST/$DB_NAME" | cut -f1)"
+# du -h 會靠右補空白對齊，直接插進訊息會變成「schema 8、 12K」多一個空格。
+SIZE="$(du -h "$DEST/$DB_NAME" | cut -f1 | tr -d "[:space:]")"
 echo "已建立 ${DEST}/${DB_NAME}（schema ${SCHEMA}、${SIZE}、integrity ok）"
 
 # 保留最近 KEEP 份。只刪自己產生的時間戳目錄，手動命名的備份（m3b-upgrade-… 之類）不動。
@@ -73,3 +79,8 @@ find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
         echo "已刪除逾期快照 $(basename "$snapshot")"
       fi
     done
+
+# 明確收尾。上面的 while 在 pipeline 尾端，腳本的離開碼會隱含地變成它的狀態；
+# 目前是安全的（if 沒有 else，最後一個指令是成功的 test），但備份腳本的離開碼是
+# 呼叫端唯一的判斷依據，不該取決於這種間接推理。
+exit 0
