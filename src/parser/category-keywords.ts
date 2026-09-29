@@ -8,9 +8,10 @@
  *
  * 表裡刻意只放餐別與明確品類，不放店名或細品項（「一蘭拉麵」「珍奶」）。表一膨脹
  * 就變成替使用者猜測，那個需求的正解是讓使用者教一次就記住的「商家記憶」
- * （docs/todo/merchant-memory.md），不是無止盡地加詞。
+ * （docs/todo/merchant-registration.md），不是無止盡地加詞。
  */
 import { categoryName } from "../domain/category-catalog.js";
+import { normalizeReferenceName } from "../domain/reference-data.js";
 
 export interface CategoryMatch {
   readonly categoryKey: string;
@@ -139,4 +140,23 @@ export function matchMerchantCategory(name: string): CategoryMatch | undefined {
     categoryKey: hit.categoryKey,
     ...(hit.subcategory ? { subcategory: hit.subcategory } : {}),
   };
+}
+
+/**
+ * 使用者自訂關鍵字的比對。與內建表同樣是子字串包含、最長優先；長度相同時取先出現的
+ * （listUserCategoryKeywords 依關鍵字排序，順序因此是穩定的）。
+ *
+ * 兩邊都先正規化：唯一鍵用的是 normalizeReferenceName，比對若用原字串，`Costco` 會
+ * 存得進去卻對不到 `costco 500`，使用者被重複追問同一個詞、每答一次還會把先前存的
+ * 大小寫覆蓋掉，兩種寫法永遠只有一種能用。
+ */
+export function matchUserKeyword<T extends { readonly keyword: string }>(
+  text: string,
+  keywords: readonly T[] | undefined,
+): T | undefined {
+  if (!keywords || keywords.length === 0) return undefined;
+  const haystack = normalizeReferenceName(text);
+  return [...keywords]
+    .sort((a, b) => b.keyword.length - a.keyword.length)
+    .find((entry) => haystack.includes(normalizeReferenceName(entry.keyword)));
 }

@@ -154,3 +154,73 @@ export function formatBatchSummary(items: readonly BatchItem[]): string {
   ];
   return `${String(items.length)} 筆：${parts.join("、")}`;
 }
+
+/**
+ * 分類補完之後，提議把句子裡那個不認得的詞記成使用者自訂關鍵字。
+ *
+ * 刻意排在預覽之後、獨立一則：分類追問的流程完全不變，草稿此時已經完整，所以誤判時
+ * 「不用」只是一下，而且不影響已經做完的事。殘餘文字偵測分不出「一蘭拉麵」是店名而
+ * 「牛排」是品項，也分不出「雜支」兩者都不是——因此這裡只能提議，不能自作主張。
+ */
+export function formatKeywordOffer(
+  keyword: string,
+  categoryName: string,
+  draftRef: string,
+): DraftPrompt {
+  return {
+    text: [
+      `還不認識「${keyword}」，要記住嗎？`,
+      `記住之後，下次看到「${keyword}」就直接歸到${categoryName}，不再追問。`,
+    ].join("\n"),
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          {
+            text: "記住",
+            callback_data: encodeCallback({ kind: "teach-keyword", draftRef, remember: true }),
+          },
+          {
+            text: "不用",
+            callback_data: encodeCallback({ kind: "teach-keyword", draftRef, remember: false }),
+          },
+        ],
+      ],
+    },
+  };
+}
+
+/**
+ * `/keywords`：列出使用者教過的詞，每個詞配一顆刪除鍵。
+ *
+ * 這是「教錯了」唯一的出路。教過的詞會先於任何追問被命中，所以那個詞再也不會跳出
+ * 「要記住嗎」——沒有這份清單，一次誤觸就會讓之後每一筆含這個詞的交易都被歸錯分類。
+ */
+export function formatKeywordList(
+  keywords: readonly {
+    readonly keyword: string;
+    readonly categoryName: string;
+    readonly ref: string;
+  }[],
+): DraftPrompt {
+  if (keywords.length === 0) {
+    return { text: "還沒有教過任何詞。解不出分類時，補完分類後就會問你要不要記住。" };
+  }
+  return {
+    text: ["教過的詞：", ...keywords.map((item) => `${item.keyword} · ${item.categoryName}`)].join(
+      "\n",
+    ),
+    replyMarkup: {
+      inline_keyboard: [
+        ...keywords.map((item) => [
+          {
+            text: `刪除 ${item.keyword}`,
+            callback_data: encodeCallback({ kind: "delete-keyword", ref: item.ref }),
+          },
+        ]),
+        // 與 /pending、/advances、/recent 一致：清單訊息最後一列是關閉鍵，
+        // 否則它會一直留在對話裡佔位置。
+        [{ text: "關閉清單", callback_data: "dismiss-keywords" }],
+      ],
+    },
+  };
+}

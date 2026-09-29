@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { categoryName } from "../../src/domain/category-catalog.js";
 import {
   categoryKeywords,
+  matchUserKeyword,
   matchCategoryKeyword,
   matchMerchantCategory,
   orderedKeywords,
@@ -104,5 +105,35 @@ describe("matchMerchantCategory", () => {
 
   it("returns undefined for an unmapped merchant", () => {
     expect(matchMerchantCategory("一蘭拉麵")).toBeUndefined();
+  });
+});
+
+describe("matchUserKeyword", () => {
+  it("ignores case and width, matching how the keyword is stored", () => {
+    // 唯一鍵用的是 normalizeReferenceName；比對若用原字串，`Costco` 存得進去卻對不到
+    // `costco 500`，使用者會被無止盡地重複追問同一個詞。
+    const keywords = [{ keyword: "Costco", categoryId: "c1" }];
+
+    expect(matchUserKeyword("costco 500", keywords)?.categoryId).toBe("c1");
+    expect(matchUserKeyword("ＣＯＳＴＣＯ 500", keywords)?.categoryId).toBe("c1");
+    expect(matchUserKeyword("Costco 500", keywords)?.categoryId).toBe("c1");
+  });
+
+  it("prefers the longest taught keyword", () => {
+    const keywords = [
+      { keyword: "拉麵", categoryId: "short" },
+      { keyword: "一蘭拉麵", categoryId: "long" },
+    ];
+
+    expect(matchUserKeyword("一蘭拉麵 200", keywords)?.categoryId).toBe("long");
+    expect(matchUserKeyword("其他拉麵 200", keywords)?.categoryId).toBe("short");
+  });
+
+  it("returns undefined when nothing was taught", () => {
+    // 明確標注型別：空陣列會讓泛型推成 never，回傳型別跟著退化。
+    const none: { keyword: string; categoryId: string }[] = [];
+
+    expect(matchUserKeyword("牛排 300", none)).toBeUndefined();
+    expect(matchUserKeyword("牛排 300", undefined)).toBeUndefined();
   });
 });

@@ -1,4 +1,11 @@
-import type { Account, Category, Counterparty, Merchant, Tag } from "../domain/reference-data.js";
+import type {
+  Account,
+  Category,
+  Counterparty,
+  Merchant,
+  Tag,
+  UserCategoryKeyword,
+} from "../domain/reference-data.js";
 
 export interface NamedReferenceInput {
   readonly referenceId: string;
@@ -18,6 +25,10 @@ export interface ReferenceRepository {
   saveAccount(account: Account): Promise<void>;
   saveCategory(category: Category): Promise<void>;
   upsertMerchant(input: NamedReferenceInput): Promise<Merchant>;
+  listUserCategoryKeywords(ownerId: string): Promise<UserCategoryKeyword[]>;
+  /** 同一個關鍵字再教一次就改指向新分類，不會留下兩筆。 */
+  saveUserCategoryKeyword(keyword: UserCategoryKeyword): Promise<void>;
+  deleteUserCategoryKeyword(ownerId: string, keyword: string): Promise<void>;
   upsertCounterparty(input: NamedReferenceInput): Promise<Counterparty>;
   upsertTag(input: NamedReferenceInput): Promise<Tag>;
 }

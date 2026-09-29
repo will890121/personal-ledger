@@ -90,7 +90,10 @@ describe("draft routing", () => {
     const record = await repository.getDraftRecord({ ownerId: "123", draftRef });
     expect(record?.status).toBe("awaiting_confirmation");
     expect(record?.draft?.allocations[0]?.categoryId).toBe("category-lunch");
-    expect(getText(calls.at(-1))).toContain("總金額：TWD 60");
+    // 預覽是就地改寫那則追問訊息；其後還會多一則「要記住這個詞嗎」的提議
+    // （見 teach-keyword.test.ts），所以要看 editMessageText 而不是最後一則。
+    const edited = calls.filter((call) => call.method === "editMessageText").at(-1);
+    expect(getText(edited)).toContain("總金額：TWD 60");
   });
 
   it("replaces the prompt in place when answered with a candidate button", async () => {
@@ -101,10 +104,16 @@ describe("draft routing", () => {
 
     await bot.handleUpdate(callbackUpdate({ updateId: 2, data: `a:${draftRef}:cat:0` }));
 
-    const after = calls.filter((call) => call.method === "sendMessage").length;
-    expect(after).toBe(before);
-    expect(calls.at(-1)?.method).toBe("editMessageText");
-    expect(getText(calls.at(-1))).toContain("總金額：TWD 60");
+    // 這一輪唯一的新訊息是「要記住這個詞嗎」的提議；預覽本身必須就地改寫，
+    // 不得再留一則帶著舊按鈕的追問。
+    const added = calls
+      .filter((call) => call.method === "sendMessage")
+      .slice(before)
+      .map((call) => getText(call));
+    expect(added).toHaveLength(1);
+    expect(added[0]).toContain("還不認識");
+    const edited = calls.filter((call) => call.method === "editMessageText").at(-1);
+    expect(getText(edited)).toContain("總金額：TWD 60");
   });
 
   it("rejects a non-numeric reply without changing the draft", async () => {

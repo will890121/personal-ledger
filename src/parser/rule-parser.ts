@@ -8,7 +8,11 @@ import type { ParseField, PartialAllocation, PartialDraft } from "../domain/draf
 import { money, type Money } from "../domain/money.js";
 import type { Account, Category, Counterparty, Merchant } from "../domain/reference-data.js";
 import { categoryName } from "../domain/category-catalog.js";
-import { matchCategoryKeyword, matchMerchantCategory } from "./category-keywords.js";
+import {
+  matchCategoryKeyword,
+  matchMerchantCategory,
+  matchUserKeyword,
+} from "./category-keywords.js";
 import { parseShare } from "./split-share.js";
 
 export type { ParseField };
@@ -24,6 +28,7 @@ export interface ParseContext {
   readonly accounts?: readonly Account[];
   readonly categories?: readonly Category[];
   readonly merchants?: readonly Merchant[];
+  readonly userKeywords?: readonly { readonly keyword: string; readonly categoryId: string }[];
   readonly counterparties?: readonly Counterparty[];
   readonly advanceAllocationIds?: readonly string[];
 }
@@ -116,8 +121,12 @@ function draft(
 }
 
 /**
- * 支出配置殼。分類一律由對照表決定：**句子裡的關鍵字優先**，沒有關鍵字才用商家對照表，
- * 兩者都對不上就回空陣列，交給 fallbackExpenseShell 的「待分類」殼去追問。
+ * 支出配置殼。分類一律由對照表決定，順序是：**使用者自訂關鍵字 → 內建關鍵字表 → 商家**，
+ * 全都對不上就回空陣列，交給 fallbackExpenseShell 的「待分類」殼去追問。
+ *
+ * 使用者教過的排第一：那是他明確指定的，比內建表的預設更有權威。自訂關鍵字以關鍵字
+ * 本身當品項（牛排 → 餐飲／牛排），與內建表同形；關鍵字剛好等於分類名稱時不帶品項，
+ * 否則會印出「餐飲／餐飲」，就是 M2「午餐／午餐」重複的翻版。
  *
  * 關鍵字必須贏過商家：商家是店家層級的粗略訊號（Uber 同時有乘車與外送，所以它在
  * 商家表裡連 subcategory 都不敢給），而使用者打出的「外送」「晚餐」是他當下明確說出的
@@ -135,15 +144,37 @@ function expenseShell(
   merchant: Merchant | undefined,
   amount?: Money,
 ): PartialAllocation[] {
+  const shell = {
+    allocationId: context.allocationId,
+    fundsEffect: account?.type === "credit_card" ? ("none" as const) : ("outflow" as const),
+    purpose: "expense" as const,
+    ...(amount ? { amount } : {}),
+  };
+
+  const taught = matchUserKeyword(text, context.userKeywords);
+  if (taught) {
+    // 分類可能已被停用或刪除；此時不能讓草稿指向一個查不到的分類，交回追問。
+    const resolved = context.categories?.find(
+      (item) => item.categoryId === taught.categoryId && item.active,
+    );
+    if (resolved) {
+      return [
+        {
+          ...shell,
+          categoryId: resolved.categoryId,
+          category: resolved.name,
+          ...(taught.keyword === resolved.name ? {} : { subcategory: taught.keyword }),
+        },
+      ];
+    }
+  }
+
   const match =
     matchCategoryKeyword(text) ?? (merchant ? matchMerchantCategory(merchant.name) : undefined);
   if (!match) return [];
   return [
     {
-      allocationId: context.allocationId,
-      fundsEffect: account?.type === "credit_card" ? "none" : "outflow",
-      purpose: "expense",
-      ...(amount ? { amount } : {}),
+      ...shell,
       // 後援名稱取自 category-catalog，與 bootstrap 種的名稱同一份定義；兩邊各寫一份
       // 正是「午餐／午餐」躲過所有測試的原因。`?? match.categoryKey` 實際上不可達
       // （category-keywords 在模組載入時就驗證過每個 key），留著只是為了滿足型別。

@@ -17,6 +17,10 @@ export type CallbackAction =
   // 預覽的取消鍵沿用舊的 `cancel:<draftId>`，而 draftId 是 UUID。追問訊息手上只有 8 碼
   // draftRef，也不該把 UUID 塞進 callback_data，因此另立一個以 draftRef 為鍵的取消動作。
   | { readonly kind: "cancel"; readonly draftRef: string }
+  | { readonly kind: "teach-keyword"; readonly draftRef: string; readonly remember: boolean }
+  // 關鍵字本身是中文，不能放進 callback_data；改帶由關鍵字導出的 8 碼短碼。
+  // 不用清單索引：清單一變，同一個索引就指向別的詞，按「刪除 丙」會靜靜刪掉「丁」。
+  | { readonly kind: "delete-keyword"; readonly ref: string }
   | { readonly kind: "advance-recover"; readonly ref: string }
   | { readonly kind: "advance-abandon"; readonly ref: string };
 
@@ -60,6 +64,10 @@ export function encodeCallback(action: CallbackAction): string {
       return guard(`c:${action.draftRef}`);
     case "cancel":
       return guard(`x:${action.draftRef}`);
+    case "teach-keyword":
+      return guard(`k:${action.draftRef}:${action.remember ? "1" : "0"}`);
+    case "delete-keyword":
+      return guard(`kd:${action.ref}`);
     case "advance-recover":
       return guard(`ar:${action.ref}`);
     case "advance-abandon":
@@ -74,6 +82,14 @@ export function decodeCallback(data: string): CallbackAction | null {
     const field = fieldsByCode.get(second);
     if (!REF_PATTERN.test(first) || !field || !INDEX_PATTERN.test(third)) return null;
     return { kind: "answer", draftRef: first, field, index: Number(third) };
+  }
+  if (prefix === "kd" && first !== undefined) {
+    if (!REF_PATTERN.test(first)) return null;
+    return { kind: "delete-keyword", ref: first };
+  }
+  if (prefix === "k" && first !== undefined && second !== undefined) {
+    if (!REF_PATTERN.test(first) || (second !== "0" && second !== "1")) return null;
+    return { kind: "teach-keyword", draftRef: first, remember: second === "1" };
   }
   if (prefix === "x" && first !== undefined) {
     if (!REF_PATTERN.test(first)) return null;
