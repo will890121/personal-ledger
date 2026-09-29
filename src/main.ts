@@ -15,7 +15,7 @@ import { SqliteLedgerRepository } from "./db/sqlite-ledger-repository.js";
 import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
 import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
 import { logger } from "./logger.js";
-import { createLedgerBot } from "./telegram/create-bot.js";
+import { createLedgerBot, startBot } from "./telegram/create-bot.js";
 import type { OutboxRunner } from "./telegram/outbox-runner.js";
 import { dateInTimezone, timeOfDayInTimezone } from "./timezone.js";
 
@@ -94,6 +94,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     runtime.close();
     return;
   }
+
+  // setMyCommands 是一次網路呼叫，跟背景輪詢一樣只在真正跑起來的行程裡做一次：
+  // LEDGER_STARTUP_CHECK 探測已經在上面 return 掉，不會走到這裡，探測仍然能快速結束。
+  await startBot(runtime.bot);
 
   // 背景遞送迴圈只在真正跑起來的行程裡啟動：LEDGER_STARTUP_CHECK 探測與測試都只是
   // 建構 runtime 就結束，不該讓每一次建構都掛一個真的 interval。

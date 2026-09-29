@@ -2,7 +2,9 @@ import { Bot, GrammyError } from "grammy";
 import type { Update } from "grammy/types";
 
 import { logger } from "../logger.js";
+import { LEDGER_COMMANDS } from "./commands.js";
 import type { LedgerBotDependencies } from "./dependencies.js";
+import { formatHelp } from "./format-help.js";
 import { registerAdvanceHandlers } from "./handlers/advances.js";
 import { registerDraftHandlers } from "./handlers/drafts.js";
 import { registerPendingHandlers } from "./handlers/pending.js";
@@ -133,10 +135,26 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
   registerPendingHandlers(bot, fullDependencies);
   registerAdvanceHandlers(bot, fullDependencies);
   // 必須排在 registerDraftHandlers 之前：drafts.ts 用 bot.on("message:text") 接住所有
-  // 文字訊息當成草稿輸入、不呼叫 next()，晚註冊的話 /status 永遠輪不到，會被誤判成
-  // 「無法解析這筆輸入」。
+  // 文字訊息當成草稿輸入、不呼叫 next()，晚註冊的話 /status、/help 永遠輪不到，會被
+  // 誤判成「無法解析這筆輸入」。tests/telegram/help-command.test.ts 的清單測試會走過
+  // LEDGER_COMMANDS 逐一驗證這件事，不必再靠這則註解提醒下一個新增的指令。
   registerStatusHandlers(bot, fullDependencies);
+  bot.command("help", async (context) => {
+    await context.reply(formatHelp());
+  });
   registerDraftHandlers(bot, fullDependencies);
 
   return { bot, outboxRunner };
+}
+
+/**
+ * 向 Telegram 註冊「/」選單裡的指令清單（`setMyCommands`）。
+ *
+ * 刻意不放進 createLedgerBot：那是一次網路呼叫，而 createLedgerBot 在測試裡被
+ * 建構數百次——每次都順便打一次 setMyCommands 沒有意義，也會讓「測試建構 bot」
+ * 跟「應用程式真正上線」這兩件事混在一起。真正呼叫的地方是 src/main.ts，
+ * 在 LEDGER_STARTUP_CHECK 探測之後、真正開始輪詢（bot.start()）之前。
+ */
+export async function startBot(bot: Bot): Promise<void> {
+  await bot.api.setMyCommands([...LEDGER_COMMANDS]);
 }
