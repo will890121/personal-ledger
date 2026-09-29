@@ -73,6 +73,7 @@ describe("confirmDraft writes the ledger change and its message together", () =>
       chat_id: string;
       target_message_id: string;
       attempts: number;
+      created_at: string;
     };
     // 渲染函式必須在 transaction 內、交易產生之後被呼叫，否則拿不到 transactionId。
     expect(row.text).toBe(`已入帳：交易 ID ${confirmed.transactionId}`);
@@ -82,6 +83,10 @@ describe("confirmDraft writes the ledger change and its message together", () =>
       target_message_id: "77",
       attempts: 0,
     });
+    // created_at 必須是明寫的 ISO 字串。少了這條斷言，把它從 INSERT 拿掉讓欄位落到
+    // DEFAULT CURRENT_TIMESTAMP（`YYYY-MM-DD HH:MM:SS`）整份測試仍然全綠，而
+    // summarizeOutbox 的 oldestPendingAt 讀的就是這個欄位。
+    expect(row.created_at).toBe("2026-09-30T01:01:00.000Z");
   });
 
   it("leaves no message behind when the ledger write fails", () => {
