@@ -1844,11 +1844,26 @@ describe("pre-migration snapshot", () => {
 
     const snapshot = takePreMigrationSnapshot(database, directory, 8, new Date());
 
-    expect(snapshot).toMatch(/pre-migration\/8-.*\.sqlite$/);
+    expect(snapshot).toMatch(/pre-migration\/.*-8\.sqlite$/);
     // 快照本身必須是可用的資料庫，否則它不是備份只是檔案。
     const restored = openDatabase(snapshot ?? "");
     expect(restored.pragma("integrity_check", { simple: true })).toBe("ok");
     expect(restored.prepare("SELECT max(version) AS v FROM schema_migrations").get()).toEqual({ v: 7 });
+    restored.close();
+  });
+
+  it("captures data still sitting in the write-ahead log", () => {
+    // VACUUM INTO 存在的全部理由。少了這條，把它換成 copyFileSync 四條測試全綠——
+    // 審查時實測過——而複製檔案會漏掉尚未 checkpoint 的已提交資料。
+    const { directory, databasePath } = ledgerAtVersion(7);
+    const database = openDatabase(databasePath);
+    database.exec("CREATE TABLE wal_probe (id INTEGER PRIMARY KEY)");
+    database.prepare("INSERT INTO wal_probe (id) VALUES (1)").run();
+
+    const snapshot = takePreMigrationSnapshot(database, directory, 8, new Date());
+
+    const restored = openDatabase(snapshot ?? "");
+    expect(restored.prepare("SELECT count(*) AS total FROM wal_probe").get()).toEqual({ total: 1 });
     restored.close();
   });
 
@@ -1915,7 +1930,11 @@ export function takePreMigrationSnapshot(
   const folder = join(dataDirectory, "pre-migration");
   mkdirSync(folder, { recursive: true });
   const stamp = now.toISOString().replace(/[:.]/g, "-");
-  const destination = join(folder, `${String(targetVersion)}-${stamp}.sqlite`);
+  // 時間戳放在前面，版本放後面：ISO 時間戳是固定寬度，字典序天然等於時間序。
+  // 反過來（版本在前）的話，版本一進到兩位數，`10-…` 會排在 `9-…` 之前，而修剪是拿
+  // 排序後的最前面當「最舊」刪掉——結果是把最新、最有價值的那一份刪了，留下三份陳舊的。
+  // 這不是排序函式該修的事，而是不要讓可變寬度的前綴擋在固定寬度的時間戳前面。
+  const destination = join(folder, `${stamp}-${String(targetVersion)}.sqlite`);
   database.exec(`VACUUM INTO '${destination.replace(/'/g, "''")}'`);
   pruneSnapshots(folder, 3);
   return destination;
