@@ -7,6 +7,7 @@ import { registerDraftHandlers } from "./handlers/drafts.js";
 import { registerPendingHandlers } from "./handlers/pending.js";
 import { registerSummaryHandlers } from "./handlers/summaries.js";
 import { registerTransactionHandlers } from "./handlers/transactions.js";
+import { createAttentionNotifier } from "./notify-attention.js";
 import { createOutboxRunner, type OutboxRunner } from "./outbox-runner.js";
 
 export type { LedgerBotDependencies };
@@ -75,8 +76,8 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
 
   // 預設的遞送管道就是這顆 bot 自己的 api：sendMessage／editMessageText 借用
   // grammY 既有的 HTTP 呼叫，不必另外接一份 Telegram client。onNeedsAttention
-  // 目前是空實作——Task 9 會把它換成 createAttentionNotifier，這裡先卡住介面，
-  // 不在這個任務發明告警行為。
+  // 交給 createAttentionNotifier：一列放棄遞送時盡力發一則告警，同一條管道
+  // 送不到就吞掉，不讓 drainOnce 整批中斷。
   const outboxRunner =
     dependencies.outboxRunner ??
     createOutboxRunner({
@@ -88,7 +89,14 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
         editMessageText: (chatId, messageId, text, options) =>
           bot.api.editMessageText(chatId, messageId, text, options),
       },
-      onNeedsAttention: () => Promise.resolve(),
+      onNeedsAttention: createAttentionNotifier({
+        repository: dependencies.repository,
+        ownerId: dependencies.ownerId,
+        now: dependencies.now,
+        api: {
+          sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text),
+        },
+      }),
     });
   const fullDependencies: LedgerBotDependencies = { ...dependencies, outboxRunner };
 
