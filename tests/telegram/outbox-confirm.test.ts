@@ -54,6 +54,12 @@ describe("confirming a draft", () => {
 
     await bot.handleUpdate(callbackUpdate({ updateId: 1, data: "confirm:draft-1" }));
 
+    // 訊息只能有一個真相來源：如果 handler 自己又送了一次（例如重新長出一個
+    // editMessageText），這裡要抓到，而不是只看最後一則訊息長什麼樣子。
+    const deliveries = calls.filter(
+      (call) => call.method === "sendMessage" || call.method === "editMessageText",
+    );
+    expect(deliveries).toHaveLength(1);
     expect(getText(calls.at(-1))).toContain("已入帳");
     expect(await outboxStatus(repository)).toBe("delivered");
   });
