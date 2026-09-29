@@ -9,7 +9,7 @@ import type { Bot } from "grammy";
 import { type AppConfig, loadConfig } from "./config.js";
 import { bootstrapReferenceData } from "./db/bootstrap-reference-data.js";
 import { openDatabase } from "./db/database.js";
-import { migrate } from "./db/migrate.js";
+import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
 import { SqliteLedgerRepository } from "./db/sqlite-ledger-repository.js";
 import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
 import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
@@ -61,6 +61,7 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       generateId: randomUUID,
       now: () => new Date(),
       today: () => dateInTimezone(new Date(), config.timezone),
+      schemaVersion: SCHEMA_VERSION,
     });
 
     return {

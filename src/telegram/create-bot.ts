@@ -5,6 +5,7 @@ import type { LedgerBotDependencies } from "./dependencies.js";
 import { registerAdvanceHandlers } from "./handlers/advances.js";
 import { registerDraftHandlers } from "./handlers/drafts.js";
 import { registerPendingHandlers } from "./handlers/pending.js";
+import { registerStatusHandlers } from "./handlers/status.js";
 import { registerSummaryHandlers } from "./handlers/summaries.js";
 import { registerTransactionHandlers } from "./handlers/transactions.js";
 import { createAttentionNotifier } from "./notify-attention.js";
@@ -146,6 +147,10 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
   registerSummaryHandlers(bot, fullDependencies);
   registerPendingHandlers(bot, fullDependencies);
   registerAdvanceHandlers(bot, fullDependencies);
+  // 必須排在 registerDraftHandlers 之前：drafts.ts 用 bot.on("message:text") 接住所有
+  // 文字訊息當成草稿輸入、不呼叫 next()，晚註冊的話 /status 永遠輪不到，會被誤判成
+  // 「無法解析這筆輸入」。
+  registerStatusHandlers(bot, fullDependencies);
   registerDraftHandlers(bot, fullDependencies);
 
   return { bot, outboxRunner };

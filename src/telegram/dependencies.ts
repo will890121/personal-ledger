@@ -21,4 +21,6 @@ export interface LedgerBotDependencies {
    * 這裡只是宣告 handler 看得到的形狀。
    */
   readonly outboxRunner: OutboxRunner;
+  /** /status 顯示用；由呼叫端（main.ts／測試 harness）從 src/db/migrate.ts 的 SCHEMA_VERSION 帶入。 */
+  readonly schemaVersion: number;
 }

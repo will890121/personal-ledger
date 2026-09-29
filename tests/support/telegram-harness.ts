@@ -2,6 +2,7 @@ import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 
 import { createLedgerBot } from "../../src/telegram/create-bot.js";
+import { SCHEMA_VERSION } from "../../src/db/migrate.js";
 import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
 import { FakeLedgerRepository } from "./fake-ledger-repository.js";
 import { FakeReferenceRepository } from "./fake-reference-repository.js";
@@ -68,6 +69,7 @@ export function createHarness(options: HarnessOptions = {}) {
     generateId: () => `id-${String(++nextId)}`,
     now: options.now ?? (() => new Date("2026-09-18T01:00:00.000Z")),
     today: () => options.today ?? "2026-09-18",
+    schemaVersion: SCHEMA_VERSION,
     botInfo: {
       id: 1,
       is_bot: true,

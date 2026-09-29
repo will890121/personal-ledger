@@ -13,6 +13,15 @@ const migrations = [
   { version: 8, url: new URL("./migrations/0008_outbox.sql", import.meta.url) },
 ] as const;
 
+// /status 顯示「schema 版本」讓使用者（其實是開發者自己）確認正式環境跑的是哪一版
+// migration；直接從這份清單推導，而不是另外維護一個常數，兩邊才不會漏同步。
+// 用 Math.max 而不是取最後一個元素：noUncheckedIndexedAccess 底下陣列索引的型別
+// 一律帶著 undefined，reduce 出最大值不必再處理那個其實不會發生的情況。
+export const SCHEMA_VERSION = migrations.reduce(
+  (max, migration) => Math.max(max, migration.version),
+  0,
+);
+
 export function migrate(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
