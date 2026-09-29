@@ -250,6 +250,17 @@ schema 版本：8
 | Migration | 有待套用時產生快照；migration 失敗則啟動中止且快照留著（AC-24） |
 | 指令清單 | `/help` 的指令段落與 `setMyCommands` 的參數都由 `commands.ts` 導出，且涵蓋每一支已註冊的指令（附帶項目） |
 
+## 10b. 兩個已知的語意選擇
+
+**超收回收的 cause 是 `recovery_recorded`。** 回收超額時，草稿同時含有 `advance_recovery`
+配置與一筆 `income` 配置（超收的部分）。`cause` 記的是「這則訊息是哪一個使用者動作造成的」，
+不是會計分類——使用者按的是回收草稿的確認鍵，所以整筆算 `recovery_recorded`，即使它順帶
+產生了一筆收入。
+
+**`transaction_updated` 目前沒有 UI 觸發得到。** 它的產生者（`updateConfirmedTransaction`）
+是真的、也接上了 outbox，只是還沒有任何按鈕會走到它——編輯交易的介面不在 M4 範圍內。
+這個 cause 在那個介面出現之前處於休眠狀態。
+
 ## 11. 不在本次範圍
 
 - 通用多型別工作佇列（M5 帶 Sheet 同步時再抽）

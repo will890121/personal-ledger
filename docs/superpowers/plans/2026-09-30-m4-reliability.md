@@ -1613,6 +1613,30 @@ describe("attention notifier", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("does not let a failed alert consume the throttle window", async () => {
+    // 節流的目的是不要洗版使用者；送失敗的通知沒到達使用者，不該吃掉那 10 分鐘。
+    // 少了這條，把 setSetting 移到 try 之前（每次嘗試都寫）四條測試全綠。
+    const { notify, api, advance } = harness();
+    api.sendMessage.mockRejectedValueOnce(new Error("network down"));
+    await notify(stuckMessage());
+
+    advance(60_000);
+    await notify(stuckMessage());
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("never puts financial content in the alert", async () => {
+    // 這則通知可能在管道半通不通時送出，用途是「去看 /status」而不是重述交易。
+    // 只用 toContain 檢查關鍵句的話，在文案後面加一個金額仍然全綠——審查時實測過。
+    const { notify, api } = harness();
+
+    await notify(stuckMessage());
+
+    const text = api.sendMessage.mock.calls[0]?.[1] as string;
+    expect(text).not.toMatch(/\d/);
+  });
+
   it("swallows its own failure instead of throwing", async () => {
     // 正在壞掉的就是 Telegram 這條管道，通知本來就可能送不出去。丟例外會讓
     // drainOnce 整批中斷，後面的列連試都沒試到。
