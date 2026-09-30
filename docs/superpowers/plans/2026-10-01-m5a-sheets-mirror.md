@@ -1034,7 +1034,7 @@ git commit -m "feat: 把交易與配置投影成具型別的儲存格"
 ```ts
 import { describe, expect, it } from "vitest";
 
-import { affectedMonths, monthRange } from "../../src/domain/sheet-months.js";
+import { affectedMonths, monthRange, monthlySummaryRow } from "../../src/domain/sheet-months.js";
 
 describe("affectedMonths", () => {
   it("returns the month of each changed transaction", () => {
@@ -1072,6 +1072,57 @@ describe("affectedMonths", () => {
     expect(affectedMonths([{ transactionId: "t1", occurredDate: "2026-10-05" }], previous)).toEqual(
       ["2026-10"],
     );
+  });
+});
+
+describe("monthlySummaryRow", () => {
+  it("places each of the eight figures under its own heading", () => {
+    // 2026-10-01 補：原本這份計畫完全沒有測 monthlySummaryRow —— 相鄰兩個欄位對調
+    // 會讓使用者的試算表把錯的數字放在錯的標題下，而整套檢查不會有任何反應。
+    // 標題列與資料列是由兩段不同的程式寫出去的，所以位置必須逐一釘住。
+    const summary = {
+      actualInflow: { amount: "1", currency: "TWD" as const },
+      actualOutflow: { amount: "2", currency: "TWD" as const },
+      netCashFlow: { amount: "3", currency: "TWD" as const },
+      personalIncome: { amount: "4", currency: "TWD" as const },
+      grossPersonalExpense: { amount: "5", currency: "TWD" as const },
+      refunds: { amount: "6", currency: "TWD" as const },
+      netPersonalExpense: { amount: "7", currency: "TWD" as const },
+      personalBalance: { amount: "8", currency: "TWD" as const },
+      categories: [],
+    };
+
+    const row = monthlySummaryRow("2026-10", summary, new Date("2026-10-01T00:00:00.000Z"));
+
+    expect(row).toEqual([
+      { kind: "string", value: "2026-10" },
+      { kind: "number", value: 1 },
+      { kind: "number", value: 2 },
+      { kind: "number", value: 3 },
+      { kind: "number", value: 4 },
+      { kind: "number", value: 5 },
+      { kind: "number", value: 6 },
+      { kind: "number", value: 7 },
+      { kind: "number", value: 8 },
+      { kind: "string", value: "2026-10-01T00:00:00.000Z" },
+    ]);
+  });
+});
+
+describe("affectedMonths sorting", () => {
+  it("returns months sorted regardless of the order they were discovered", () => {
+    // 排序原本只是「剛好」被跨月那條測到（它的 fixture 正好是反序）。
+    // 這條直接咬住排序本身。
+    expect(
+      affectedMonths(
+        [
+          { transactionId: "t1", occurredDate: "2026-12-01" },
+          { transactionId: "t2", occurredDate: "2026-01-01" },
+          { transactionId: "t3", occurredDate: "2026-06-01" },
+        ],
+        new Map(),
+      ),
+    ).toEqual(["2026-01", "2026-06", "2026-12"]);
   });
 });
 
