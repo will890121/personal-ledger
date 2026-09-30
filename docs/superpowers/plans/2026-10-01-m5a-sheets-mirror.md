@@ -311,6 +311,12 @@ Run：同 Step 5。Expected：PASS，3 條。
 
 - [ ] **Step 8: 跑完整檢查**
 
+**預期會有既有測試變紅，這是正常的。** 專案裡有數個測試把 migration 版本清單或
+`/status` 的「schema 版本：N」字串寫死 —— 它們存在的目的就是在有人新增 migration 時
+發出訊號。看到它們紅了不要懷疑自己的改動，把版本 9 補進去即可。
+**最小幅度更新**（清單追加 `{ version: 9 }`、字串改成 9），不要放寬或重寫這些斷言 ——
+放寬等於把哨兵拆掉。
+
 Run：`docker run --rm -v "$PWD":/app -v personal-ledger-modules:/app/node_modules -w /app personal-ledger:deps pnpm check`
 Expected：exit 0。
 
