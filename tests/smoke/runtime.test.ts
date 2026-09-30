@@ -28,6 +28,7 @@ describe("runtime composition", () => {
       databasePath: join(directory, "nested", "ledger.sqlite"),
       timezone: "Asia/Taipei" as const,
       currency: "TWD",
+      sheets: null,
     });
 
     try {
@@ -102,6 +103,7 @@ describe("runtime composition", () => {
       databasePath,
       timezone: "Asia/Taipei" as const,
       currency: "TWD" as const,
+      sheets: null,
     };
     const runtime = await composeRuntime(config);
     let categoryCount = 0;
@@ -193,6 +195,7 @@ describe("runtime composition", () => {
         databasePath,
         timezone: "Asia/Taipei" as const,
         currency: "TWD" as const,
+        sheets: null,
       }),
     ).rejects.toThrow();
 
