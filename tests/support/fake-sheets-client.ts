@@ -72,8 +72,14 @@ export class FakeSheetsClient implements SheetsClient {
       // 若 cells 的長度與標題列的欄數不一致，模擬器「整列取代」的行為就會跟真實
       // 的「只碰指定範圍」不一樣，而這個落差在測試裡永遠看不到——所以在套用前
       // 就大聲拋錯，逼引擎一次就把整列的欄位算對。
+      //
+      // 標題列若是零寬度就沒有東西可以比對，直接略過這條規則。分頁空著的時候，
+      // 第一輪為了讓資料從第 2 列開始會在第 1 列補一個零寬度的空白列；把它當成
+      // 「0 欄的標題」會讓之後每一次寫入都被拒絕，於是任何多輪的測試（收斂本質上
+      // 就是多輪）在初始為空的分頁上根本跑不起來。這條規則要抓的是「引擎寫錯欄數」，
+      // 不是「分頁還沒有標題」。
       const header = this.tabs.get(write.tab)?.[0];
-      if (header !== undefined && write.cells.length !== header.length) {
+      if (header !== undefined && header.length > 0 && write.cells.length !== header.length) {
         return Promise.reject(
           new Error(
             `column count mismatch on ${write.tab} row ${String(write.rowIndex)}: ` +

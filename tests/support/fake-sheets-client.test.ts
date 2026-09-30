@@ -83,6 +83,22 @@ describe("FakeSheetsClient", () => {
     expect(await client.readColumns("Transactions", 3)).toEqual([["id", "日期", "金額"]]);
   });
 
+  it("skips the width check while the header row is still empty", async () => {
+    // 分頁空著時，第一輪會在第 1 列補一個零寬度的空白列（資料一律從第 2 列起）。
+    // 若把它當成「0 欄的標題」，同一個分頁之後的每一次寫入都會被拒絕——初始為空的
+    // 分頁上就不可能跑多輪同步，而收斂本來就是多輪的性質。
+    const client = new FakeSheetsClient({ Transactions: [] });
+
+    await client.updateCells([
+      { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "t1" }] },
+    ]);
+    await client.updateCells([
+      { tab: "Transactions", rowIndex: 3, cells: [{ kind: "string", value: "t2" }] },
+    ]);
+
+    expect(await client.readColumns("Transactions", 1)).toEqual([[""], ["t1"], ["t2"]]);
+  });
+
   it("rejects a batch that writes to the same row twice", async () => {
     // 同一批裡兩筆寫到同一列代表引擎的列號算錯了，靜默後寫獲勝會讓這個錯誤
     // 完全沒有訊號。
