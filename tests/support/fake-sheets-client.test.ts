@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+
+import { FakeSheetsClient } from "./fake-sheets-client.js";
+
+describe("FakeSheetsClient", () => {
+  it("grows the sheet when a write lands past the current extent", async () => {
+    // 真實 Sheets 允許寫到超出現有資料的列，中間會補空白列。模擬器若拋錯或靜默丟棄，
+    // 「新 id 附加到最後」這條路徑在測試裡就永遠走不到。
+    const client = new FakeSheetsClient({ Transactions: [["transaction_id"]] });
+
+    await client.updateCells([
+      { tab: "Transactions", rowIndex: 4, cells: [{ kind: "string", value: "t1" }] },
+    ]);
+
+    const rows = await client.readColumns("Transactions", 1);
+    expect(rows).toEqual([["transaction_id"], [""], [""], ["t1"]]);
+  });
+
+  it("overwrites in place when a write targets an existing row", async () => {
+    const client = new FakeSheetsClient({
+      Transactions: [["transaction_id"], ["t1"], ["t2"]],
+    });
+
+    await client.updateCells([
+      { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "changed" }] },
+    ]);
+
+    expect(await client.readColumns("Transactions", 1)).toEqual([
+      ["transaction_id"],
+      ["changed"],
+      ["t2"],
+    ]);
+  });
+
+  it("renders a date cell as its serial number, not as an iso string", async () => {
+    // 真實 Sheets 存的是序列值。模擬器若把日期存成 ISO 字串，Task 4 的
+    // 「讀回舊日期算受影響月份」在測試裡會用到錯的格式而假性通過。
+    const client = new FakeSheetsClient({ Transactions: [["id", "日期"]] });
+
+    await client.updateCells([
+      {
+        tab: "Transactions",
+        rowIndex: 2,
+        cells: [
+          { kind: "string", value: "t1" },
+          { kind: "date", value: 46296 },
+        ],
+      },
+    ]);
+
+    expect(await client.readColumns("Transactions", 2)).toEqual([
+      ["id", "日期"],
+      ["t1", "46296"],
+    ]);
+  });
+
+  it("fails the whole batch when any write is invalid", async () => {
+    // updateCells 的契約是全有全無。模擬器若逐格套用再拋錯，
+    // 「失敗時游標不推進、下一輪重做」就會在一個半寫入的狀態上重做。
+    const client = new FakeSheetsClient({ Transactions: [["id"], ["t1"]] });
+
+    await expect(
+      client.updateCells([
+        { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "ok" }] },
+        { tab: "NoSuchTab", rowIndex: 2, cells: [{ kind: "string", value: "boom" }] },
+      ]),
+    ).rejects.toThrow(/NoSuchTab/);
+
+    expect(await client.readColumns("Transactions", 1)).toEqual([["id"], ["t1"]]);
+  });
+
+  it("counts api calls so tests can assert none happen when idle", async () => {
+    // Task 9 的「閒置時不打 API」需要這個計數器才能被釘住。
+    const client = new FakeSheetsClient({ Transactions: [["id"]] });
+
+    await client.readColumns("Transactions", 1);
+    expect(client.callCount).toBe(1);
+  });
+});
