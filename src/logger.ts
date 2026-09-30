@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
 
-import { GrammyError } from "grammy";
-
 // 全專案唯一允許呼叫 console.* 的地方（見 eslint.config.mjs 對本檔案開的例外）。
 // 其他地方一律呼叫這裡的 info/warn/error，遮罩規則才會真的擋得住東西——
 // 只要還有別的出口可以繞過去，禁用 console.* 就沒有意義。
@@ -54,9 +52,22 @@ function redactString(value: string): string {
   return value.replace(BOT_TOKEN_PATTERN, "***");
 }
 
+// grammY 的 GrammyError 形狀：{ error_code: number, description: string }。用鴨子
+// 定型判斷而不是 `instanceof GrammyError`——這個檔案是全專案唯一的日誌出口，
+// import grammY 只為了認出一種錯誤形狀，會讓不該依賴 grammY 的地方（例如
+// src/sheets/）也沒辦法呼叫這裡（見本檔案的邊界說明）。只看兩個欄位的形狀，
+// 不看建構子，就不必知道 grammY 存在。
+function isTelegramApiError(
+  error: unknown,
+): error is { readonly error_code: number; readonly description: string } {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { error_code?: unknown; description?: unknown };
+  return typeof candidate.error_code === "number" && typeof candidate.description === "string";
+}
+
 // 錯誤訊息可能夾帶 SQL 片段（SqliteError）或使用者輸入的財務原文（ZodError 會回填實際值），
 // 因此預設只記錄錯誤類別名稱；只有本專案自己以固定字串丟出的 Error 才連訊息一起記錄。
-// GrammyError 是例外：error_code 與 description 是 Telegram Bot API 回傳的錯誤描述
+// Telegram API 錯誤是例外：error_code 與 description 是 Bot API 回傳的錯誤描述
 // （例如 "Bad Request: message is not modified"），不含使用者輸入或財務資料，
 // 記錄它們才診斷得出是哪一種 Telegram 呼叫失敗，而不是只看到一個籠統的類別名稱。
 function describeError(error: unknown): {
@@ -65,8 +76,8 @@ function describeError(error: unknown): {
   readonly errorCode?: number;
   readonly description?: string;
 } {
-  if (error instanceof GrammyError) {
-    return { name: error.name, errorCode: error.error_code, description: error.description };
+  if (isTelegramApiError(error)) {
+    return { name: "GrammyError", errorCode: error.error_code, description: error.description };
   }
   if (!(error instanceof Error)) return { name: "UnknownError" };
   if (error.name === "Error") return { name: error.name, message: error.message };
