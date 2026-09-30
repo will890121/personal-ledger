@@ -33,6 +33,10 @@
   （`"captures data still sitting in the write-ahead log"`）、「目標版本跨兩位數時仍保留最新
   快照，不被字典序排序騙走」、「只保留最近三份」、「migration 失敗後快照仍在」。
   `src/main.ts` 在有待套用 migration 時才呼叫 `takePreMigrationSnapshot`，失敗即不啟動。
+  **接線本身也被守住**：`tests/smoke/runtime.test.ts` 真的跑過 `composeRuntime`，確認快照在
+  migration **之前**產生（快照內容仍是 schema 1），且快照失敗會讓啟動中止、資料庫留在
+  升級前的版本。這兩條是 2026-09-30 整體審查後補的——在那之前，把快照挪到 `migrate()`
+  之後、或把快照失敗吞掉，兩個變異都能存活全部 496 條測試。
 - **AC-28（正式環境發生錯誤，log 不含完整財務原文或憑證）**：`src/logger.ts` 是全專案唯一
   允許呼叫 `console.*` 的地方（`eslint.config.mjs` 只對它開例外），其餘一律經過這裡才會被
   遮罩規則管到。`tests/logger.test.ts` 涵蓋：bot token 樣式偵測（即使沒放在拒絕清單的欄位裡也
@@ -41,6 +45,10 @@
   遮罩邏輯卡死（cycle guard）、深度超過 `MAX_REDACTION_DEPTH`（8 層）的分支換成明確佔位字串而
   非原樣印出——最後這條在本次任務前一個 commit（`ededc9e`）才補上變異測試釘住，之前的實作
   雖然正確但沒有測試會在「拿掉深度上限」時變紅。
+  另外兩處是 2026-09-30 整體審查後補上的：`error` 鍵的值原本繞過遮罩（見關卡二 I4），
+  以及背景工作的未捕捉拒絕原本會讓 Node runtime 把 stack trace 直接印到 stderr、
+  完全不經過這裡（見關卡二 C1）——後者讓「`src/logger.ts` 是唯一出口」這句話在修好之前
+  其實並不成立。
 - 既有資料經 migration 0008 後完整保留：2026-09-30 用一份私有複本卷（位元組同於正式測試資料
   卷，做法見下方「額外條件」）從 schema 7 升到 8，`foreign_key_check` 無錯誤，交易 7、配置 8、
   草稿 23、事件 36、稽核 8 筆全部保留。
@@ -72,9 +80,47 @@
 
 ## 關卡二：程式審查
 
-待辦——依完成定義，對整個分支的 diff（`main...m4-reliability`，42 個 commit）執行
-`superpowers:requesting-code-review`，逐條裁決後補在這裡。本文件先交出自動驗證與人工驗收
-清單骨架，程式審查與其後的修正記錄由後續流程補上。
+**已完成。** 每個任務各有一輪審查與（必要時）修正複審，最後對整個分支再做一次整體審查。
+
+### 整分支最終審查（2026-09-30）
+
+範圍 `3e86d89..73a4a12`，45 個 commit、66 個檔案、+4774／-195。審查員跑了 **35 個變異，
+29 個被測試殺死、6 個存活**，外加 6 支拋棄式行為探針。結論是 **changes needed**，
+六項必修，全部經實測重現，已於 `53d163b`..`0d3de29` 七個 commit 修完。
+
+必修項與修法：
+
+| # | 問題 | 使用者會遇到什麼 | 修法 |
+|---|---|---|---|
+| C1 | 背景 drain 的 promise 拒絕沒有 `.catch()`，Node 24 預設會終止行程；stack 由 runtime 直接印到 stderr，**繞過 `src/logger.ts`** | 資料卷寫滿或任何 SQLite I/O 錯誤時，`restart: unless-stopped` 讓 bot 每 5 秒被殺一次，成為 crash loop | 源頭加 `.catch()` 記錄；`main.ts` 再加 `unhandledRejection` 防護，記錄但不結束行程 |
+| I1 | `LEASE_MS` 30 秒遠短於 grammY 預設的 500 秒 API timeout | 網路慢但沒斷時，連線恢復後一次收到 3–6 則相同訊息 | 送出傳入 20 秒的 `AbortSignal`（短於 lease）；不動全域 `timeoutSeconds`，那會一併套用到 getUpdates 長輪詢 |
+| I2 | 三個 `markOutbox*` 沒有 compare-and-set | 訊息其實已送達，`/status` 仍顯示「待處理 ⚠️」並告警，按「重試全部」會真的再送一次 | 以 claim 當下寫入的 `lease_expires_at` 當樂觀鎖版本值；更新 0 列代表已被接手，記錄後繼續 |
+| I3 | `main.ts` 的快照接線零測試 | —（行為本來就正確，風險是日後回歸無人攔阻） | `tests/smoke/runtime.test.ts` 補兩條斷言，真的經過 `composeRuntime` |
+| I4 | logger 的 `error` 鍵繞過遮罩 | 目前不可達，但 `error` 正是最可能被未來呼叫端塞進髒東西的鍵名 | `describeError` 的結果再過一次字串遮罩 |
+| I5 | 真實 SQL 的 `status = 'pending'` 述詞零覆蓋 | —（「重啟不會自動重設 `needs_attention`」原本只在測試替身上被守住） | 真實 SQLite 上 seed 一列 `needs_attention`，斷言 claim 撈不到 |
+
+另修一項 Minor：「重試全部」原本先跑完整個 drain 才回答 callback query，半通不通時
+按鈕會一直轉圈；改成先回答再 drain。
+
+C1、I1、I2 三項都是**跨任務才看得見**的缺陷——每個任務單獨看都正確，要把 lease、
+grammY 的預設 timeout、以及「lease 可能在送出途中過期」三件事放在一起才浮現。
+單任務審查對這一類問題結構性失明，這也是整體審查存在的理由。
+
+### 不擋 merge、已記入 M5 待辦
+
+runner 對 429 `retry_after` 的消費無測試（只測了 classifier）、`main` 不呼叫
+`registerCommandMenu` 不會變紅、`LEASE_MS` 改成 1ms 不會變紅、原子性「反向」那一半
+無測試（行為已由探針驗證正確）、`scripts/backup.sh` 現在以可寫模式掛載正式卷
+（已文件化的取捨，原因見備份文件）。
+
+### 已知殘餘風險（AC-28）
+
+`describeError` 會保留 `Error.message` 與 `GrammyError.description` 的內容——這是刻意的，
+沒有它就查不出任何錯誤原因。遮罩能攔下 bot token（有明確樣式），但**財務原文沒有
+值層級的樣式可以偵測**。因此若日後有人寫出 ``new Error(`...${使用者輸入}`)``，那段原文
+會進 log。2026-09-30 逐一檢查過 `src/` 所有帶插值的 `new Error`，沒有任何一個帶入
+使用者輸入或憑證；非本專案拋出的錯誤只會記下類別名稱。這一點沒有自動測試攔阻，
+新增錯誤訊息時請自行留意。
 
 ## 關卡三：人工 Telegram 驗收
 
