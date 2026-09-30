@@ -312,7 +312,9 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
         lastSuccessAt: nowIso,
         lastError: null,
         consecutiveFailures: 0,
-        lastReconciledAt: mode === "reconcile" ? nowIso : state.lastReconciledAt,
+        // 只有真的走完全表才算「校正過了」。被迭代上限截斷時這一輪並沒有驗完整張
+        // Sheet，蓋上時間戳就等於把一個需要有人來看的狀況說成成功。
+        lastReconciledAt: mode === "reconcile" && scannedToEnd ? nowIso : state.lastReconciledAt,
       });
       return { kind: "synced", transactions, months: months.size };
     } catch (error) {
