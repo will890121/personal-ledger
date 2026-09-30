@@ -37,3 +37,18 @@ services:
 
 volumes:
   ledger-data:
+    # 明確釘住卷名，不讓 compose 依專案名自動生成。
+    #
+    # 這個名字看起來像歷史殘留，因為它就是：它源自舊的 compose 專案名
+    # （m1-foundation-first-slice），而正式帳本從那時起就一直住在裡面。現在改名
+    # 等於把真正的帳本孤立在一個沒有任何設定指向它的卷裡。
+    #
+    # 不釘住的後果不是「用到舊資料」而是**資料分裂**：compose 會依專案名去找
+    # personal-ledger_ledger-data，那個卷並不存在，於是它建一個新的空卷、在空帳本上
+    # 跑 migration、然後一切正常啟動。使用者會把新的帳記進一個全新的空資料庫，
+    # 而真正的帳本在另一個卷裡沒有被動過——兩邊都沒有任何錯誤訊息。
+    #
+    # 也不用 external: true：那會讓全新檢出的機器在卷還不存在時無法 up。
+    # 釘名字則保留「不存在就建一個」的行為，同時讓 compose 與手動
+    # docker run -v m1-foundation-first-slice_ledger-data:/app/data 指向同一份資料。
+    name: m1-foundation-first-slice_ledger-data
