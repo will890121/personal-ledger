@@ -18,7 +18,8 @@ import { seedTransaction } from "../fixtures/sheet-sync-seed.js";
 import { FakeSheetsClient } from "../support/fake-sheets-client.js";
 
 /**
- * 收斂性：塵埃落定之後，Sheet 必須等於「直接從 SQLite 算出來的投影」。
+ * 收斂性：塵埃落定之後，Sheet 上「鏡像自己寫的那些列」必須等於直接從 SQLite 算出來的
+ * 投影——一列不多、一列不少。
  *
  * 這一組測試刻意不看實作。它們不問「reconcile 有沒有分頁」、不問「清理走哪條分支」，
  * 只問最後三張分頁對不對——所以一個寫錯的實作也會被抓到，不只是「沒有實作」會被抓到。
@@ -28,6 +29,28 @@ import { FakeSheetsClient } from "../support/fake-sheets-client.js";
 
 const OWNER = "owner-1";
 const NOW = new Date("2026-10-08T05:00:00.000Z");
+
+/**
+ * 測試用的 id 一律做成 UUID 形狀。
+ *
+ * 真實的交易與配置 id 全部來自 `randomUUID()`，而清理的判準正是「UUID 形狀 + SQLite
+ * 裡找不到」。用 `t1` 這種短名字會讓整條清理路徑在測試裡永遠走不到，看起來全綠。
+ */
+const uuid = (label: string): string => `00000000-0000-4000-8000-${label.padStart(12, "0")}`;
+
+const T1 = uuid("1");
+const T2 = uuid("2");
+const T3 = uuid("3");
+const T4 = uuid("4");
+const A1 = uuid("a1");
+const A1B = uuid("a1b");
+const A2 = uuid("a2");
+const A2B = uuid("a2b");
+const A3 = uuid("a3");
+const A4 = uuid("a4");
+
+/** 與引擎同一套判準：這一列只可能是鏡像寫的。 */
+const MIRROR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const renderCell = (cell: SheetCell): string => {
   switch (cell.kind) {
@@ -44,6 +67,13 @@ const renderCell = (cell: SheetCell): string => {
 /** 只留有內容的資料列：標題不算，被清空的列也不算（空白列會累積，這是已知的代價）。 */
 const dataRows = (rows: readonly string[][]): string[][] =>
   rows.slice(1).filter((row) => row.some((cell) => cell !== ""));
+
+/**
+ * 鏡像自己寫的資料列。不變量只涵蓋這些列：使用者手打的內容不屬於投影，
+ * 也不該被鏡像碰，所以不參與比較。
+ */
+const mirrorRows = (rows: readonly string[][]): string[][] =>
+  rows.slice(1).filter((row) => MIRROR_ID.test(row[0] ?? ""));
 
 const sorted = (rows: readonly string[][]): string[][] =>
   [...rows]
@@ -127,6 +157,13 @@ describe("sheet mirror convergence", () => {
       );
   }
 
+  /** 一整列的原始字串，鍵欄放 `key`，其餘留空。用來擺殭屍列與使用者手打的列。 */
+  const rawRow = (key: string, width: number): string[] => {
+    const row = Array.from({ length: width }, () => "");
+    row[0] = key;
+    return row;
+  };
+
   /**
    * 期望的投影：直接從 SQLite 讀出全部交易，用同一組投影函式算出應該出現的列。
    * 比較的是「哪些列存在」——沒有殭屍列、沒有重複列、該有的一列都不少。
@@ -144,65 +181,67 @@ describe("sheet mirror convergence", () => {
 
   async function expectConverged(sheets: FakeSheetsClient): Promise<void> {
     const expected = await expectedProjection();
-    expect(sorted(dataRows(sheets.snapshot("Transactions")))).toEqual(
+    expect(sorted(mirrorRows(sheets.snapshot("Transactions")))).toEqual(
       sorted(expected.transactions),
     );
-    expect(sorted(dataRows(sheets.snapshot("Allocations")))).toEqual(sorted(expected.allocations));
+    expect(sorted(mirrorRows(sheets.snapshot("Allocations")))).toEqual(
+      sorted(expected.allocations),
+    );
   }
 
   it("projects sqlite onto the sheet after a sequence of changes", async () => {
     // 建立、修改（含配置換 id）、跨月搬移、軟刪除各一次。
     seedTransaction(database, OWNER, {
-      id: "t1",
+      id: T1,
       updatedAt: "2026-10-05T00:00:01.000Z",
       occurredDate: "2026-10-02",
     });
-    addAllocation({ allocationId: "a1", transactionId: "t1", amount: "100" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
     seedTransaction(database, OWNER, {
-      id: "t2",
+      id: T2,
       updatedAt: "2026-10-05T00:00:02.000Z",
       occurredDate: "2026-10-03",
       amount: "200",
     });
-    addAllocation({ allocationId: "a2", transactionId: "t2", amount: "200" });
+    addAllocation({ allocationId: A2, transactionId: T2, amount: "200" });
     seedTransaction(database, OWNER, {
-      id: "t3",
+      id: T3,
       updatedAt: "2026-10-05T00:00:03.000Z",
       occurredDate: "2026-09-20",
       amount: "300",
     });
-    addAllocation({ allocationId: "a3", transactionId: "t3", amount: "300" });
+    addAllocation({ allocationId: A3, transactionId: T3, amount: "300" });
     seedTransaction(database, OWNER, {
-      id: "t4",
+      id: T4,
       updatedAt: "2026-10-05T00:00:04.000Z",
       occurredDate: "2026-10-04",
       amount: "400",
     });
-    addAllocation({ allocationId: "a4", transactionId: "t4", amount: "400" });
+    addAllocation({ allocationId: A4, transactionId: T4, amount: "400" });
 
     const sheets = emptyWorkbook();
     const mirror = mirrorOver(sheets);
     expect((await mirror.syncOnce()).kind).toBe("synced");
     await expectConverged(sheets);
 
-    // 修改 t2：updateTransaction 是「DELETE 全部配置再 INSERT」，所以 a2 消失、a2b 出現。
-    database.prepare("DELETE FROM allocations WHERE transaction_id = 't2'").run();
-    addAllocation({ allocationId: "a2b", transactionId: "t2", amount: "250" });
-    touch("t2", { updatedAt: "2026-10-06T00:00:01.000Z", amount: "250" });
-    // 跨月搬移 t3：9 月與 10 月的摘要都變了。
-    touch("t3", { updatedAt: "2026-10-06T00:00:02.000Z", occurredDate: "2026-10-20" });
-    // 軟刪除 t4：交易列留著，狀態欄改成 deleted。
-    touch("t4", { updatedAt: "2026-10-06T00:00:03.000Z", status: "deleted" });
+    // 修改 T2：updateTransaction 是「DELETE 全部配置再 INSERT」，所以 A2 消失、A2B 出現。
+    database.prepare("DELETE FROM allocations WHERE transaction_id = ?").run(T2);
+    addAllocation({ allocationId: A2B, transactionId: T2, amount: "250" });
+    touch(T2, { updatedAt: "2026-10-06T00:00:01.000Z", amount: "250" });
+    // 跨月搬移 T3：9 月與 10 月的摘要都變了。
+    touch(T3, { updatedAt: "2026-10-06T00:00:02.000Z", occurredDate: "2026-10-20" });
+    // 軟刪除 T4：交易列留著，狀態欄改成 deleted。
+    touch(T4, { updatedAt: "2026-10-06T00:00:03.000Z", status: "deleted" });
 
     expect((await mirror.syncOnce()).kind).toBe("synced");
 
     await expectConverged(sheets);
-    const transactions = dataRows(sheets.snapshot("Transactions"));
+    const transactions = mirrorRows(sheets.snapshot("Transactions"));
     expect(transactions).toHaveLength(4);
-    expect([...transactions.map((row) => row[0])].sort()).toEqual(["t1", "t2", "t3", "t4"]);
-    // a2 的列必須真的不見了，否則樞紐分析會把已經不存在的 200 元算進去。
-    const allocationIds = dataRows(sheets.snapshot("Allocations")).map((row) => row[0]);
-    expect([...allocationIds].sort()).toEqual(["a1", "a2b", "a3", "a4"]);
+    expect([...transactions.map((row) => row[0])].sort()).toEqual([T1, T2, T3, T4].sort());
+    // A2 的列必須真的不見了，否則樞紐分析會把已經不存在的 200 元算進去。
+    const allocationIds = mirrorRows(sheets.snapshot("Allocations")).map((row) => row[0]);
+    expect([...allocationIds].sort()).toEqual([A1, A2B, A3, A4].sort());
     // 跨月搬移要讓兩個月都被重算，所以兩個月份都該有摘要列。
     expect(dataRows(sheets.snapshot("MonthlySummary")).map((row) => row[0])).toEqual([
       "2026-09",
@@ -213,15 +252,15 @@ describe("sheet mirror convergence", () => {
   it("is idempotent: syncing the same batch twice leaves the sheet unchanged", async () => {
     // 冪等是整個設計賴以成立的前提——因為冪等，才敢在失敗後整批重做、
     // 才敢讓校正把每一筆都重寫一次。
-    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-05T00:00:01.000Z" });
-    addAllocation({ allocationId: "a1", transactionId: "t1", amount: "100" });
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-10-05T00:00:01.000Z" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
     seedTransaction(database, OWNER, {
-      id: "t2",
+      id: T2,
       updatedAt: "2026-10-05T00:00:02.000Z",
       occurredDate: "2026-09-11",
       amount: "200",
     });
-    addAllocation({ allocationId: "a2", transactionId: "t2", amount: "200" });
+    addAllocation({ allocationId: A2, transactionId: T2, amount: "200" });
 
     const sheets = emptyWorkbook();
     const mirror = mirrorOver(sheets);
@@ -247,20 +286,20 @@ describe("sheet mirror convergence", () => {
   });
 
   it("converges after the sheet is corrupted by hand", async () => {
-    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-05T00:00:01.000Z" });
-    addAllocation({ allocationId: "a1", transactionId: "t1", amount: "100" });
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-10-05T00:00:01.000Z" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
     seedTransaction(database, OWNER, {
-      id: "t2",
+      id: T2,
       updatedAt: "2026-10-05T00:00:02.000Z",
       amount: "200",
     });
-    addAllocation({ allocationId: "a2", transactionId: "t2", amount: "200" });
+    addAllocation({ allocationId: A2, transactionId: T2, amount: "200" });
     seedTransaction(database, OWNER, {
-      id: "t3",
+      id: T3,
       updatedAt: "2026-10-05T00:00:03.000Z",
       amount: "300",
     });
-    addAllocation({ allocationId: "a3", transactionId: "t3", amount: "300" });
+    addAllocation({ allocationId: A3, transactionId: T3, amount: "300" });
 
     const clean = emptyWorkbook();
     await mirrorOver(clean).syncOnce();
@@ -268,13 +307,13 @@ describe("sheet mirror convergence", () => {
 
     // 使用者動手改壞：改一格金額、刪掉一整列、在中間插一列。
     const corruptedTransactions = clean.snapshot("Transactions");
-    const t1Row = corruptedTransactions.findIndex((row) => row[0] === "t1");
+    const t1Row = corruptedTransactions.findIndex((row) => row[0] === T1);
     const editedT1 = [...(corruptedTransactions[t1Row] as string[])];
     editedT1[3] = "999999";
     corruptedTransactions[t1Row] = editedT1;
-    const t2Row = corruptedTransactions.findIndex((row) => row[0] === "t2");
+    const t2Row = corruptedTransactions.findIndex((row) => row[0] === T2);
     corruptedTransactions.splice(t2Row, 1);
-    corruptedTransactions.splice(2, 0, ["使用者手動貼上的一列"]);
+    corruptedTransactions.splice(2, 0, ["我自己的備註"]);
     const corruptedAllocations = clean.snapshot("Allocations");
     corruptedAllocations.splice(1, 1);
 
@@ -288,23 +327,23 @@ describe("sheet mirror convergence", () => {
 
     expect(outcome.kind).toBe("synced");
     await expectConverged(corrupted);
-    // 手動貼上的那一列不在 SQLite 裡，所以它不屬於投影：校正要把它清掉，
-    // 但只清空、不刪除列（刪除會讓列號位移，而定位一律靠 id）。
-    expect(
-      corrupted.snapshot("Transactions").some((row) => row[0] === "使用者手動貼上的一列"),
-    ).toBe(false);
+    // 被改掉的那一格要被寫回正確值。
+    const restored = corrupted.snapshot("Transactions").find((row) => row[0] === T1);
+    expect(restored?.[3]).toBe("100");
+    // 而使用者自己寫的那一列不屬於投影，也不該被鏡像碰。
+    expect(corrupted.snapshot("Transactions").some((row) => row[0] === "我自己的備註")).toBe(true);
   });
 
   it("reconcile covers rows the delta cursor never saw", async () => {
     // M1 那些沒有稽核事件、且游標已經越過的交易：增量永遠撈不到，校正必須撈到。
-    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-09-01T00:00:01.000Z" });
-    addAllocation({ allocationId: "a1", transactionId: "t1", amount: "100" });
-    seedTransaction(database, OWNER, { id: "t2", updatedAt: "2026-09-01T00:00:02.000Z" });
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-09-01T00:00:01.000Z" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
+    seedTransaction(database, OWNER, { id: T2, updatedAt: "2026-09-01T00:00:02.000Z" });
 
     await syncRepository.saveSyncState({
       ownerId: OWNER,
       cursorUpdatedAt: "2026-12-31T00:00:00.000Z",
-      cursorTransactionId: "tz",
+      cursorTransactionId: uuid("f"),
       lastSuccessAt: null,
       lastError: null,
       consecutiveFailures: 0,
@@ -324,7 +363,7 @@ describe("sheet mirror convergence", () => {
     // 校正不准讓游標倒退，否則之後每一輪增量都要重走一遍所有東西。
     const state = await syncRepository.loadSyncState(OWNER);
     expect(state.cursorUpdatedAt).toBe("2026-12-31T00:00:00.000Z");
-    expect(state.cursorTransactionId).toBe("tz");
+    expect(state.cursorTransactionId).toBe(uuid("f"));
     expect(state.lastReconciledAt).toBe(NOW.toISOString());
   });
 
@@ -334,19 +373,18 @@ describe("sheet mirror convergence", () => {
     // 而且每次都回報成功。被手動改壞的第 500 列於是永遠不會被修正。
     const total = SYNC_BATCH + 25;
     for (let i = 0; i < total; i += 1) {
-      const id = `t${String(i).padStart(4, "0")}`;
       seedTransaction(database, OWNER, {
-        id,
+        id: uuid(String(i)),
         updatedAt: `2026-10-05T00:00:00.${String(i).padStart(3, "0")}Z`,
       });
     }
-    const lastId = `t${String(total - 1).padStart(4, "0")}`;
+    const lastId = uuid(String(total - 1));
 
     const sheets = emptyWorkbook();
     const outcome = await mirrorOver(sheets).reconcile();
 
     expect(outcome).toEqual({ kind: "synced", transactions: total, months: 1 });
-    const ids = dataRows(sheets.snapshot("Transactions")).map((row) => row[0]);
+    const ids = mirrorRows(sheets.snapshot("Transactions")).map((row) => row[0]);
     expect(ids).toHaveLength(total);
     expect(ids).toContain(lastId);
     // 全表掃完之後，持久游標應該停在真正的最後一筆。
@@ -358,13 +396,10 @@ describe("sheet mirror convergence", () => {
     // 殭屍列有兩種：來源已經不在 SQLite 的 id，以及同一個 id 的重複列
     // （引擎是後寫獲勝，較早那一列永遠不會再被覆寫）。兩者都讓
     // 「Sheet 是 SQLite 的投影」不成立。
-    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-05T00:00:01.000Z" });
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-10-05T00:00:01.000Z" });
 
-    const stale = Array.from({ length: TRANSACTIONS_HEADER.length }, () => "");
-    const ghost = [...stale];
-    ghost[0] = "t-ghost";
-    const duplicate = [...stale];
-    duplicate[0] = "t1";
+    const ghost = rawRow(uuid("dead"), TRANSACTIONS_HEADER.length);
+    const duplicate = rawRow(T1, TRANSACTIONS_HEADER.length);
     const sheets = new FakeSheetsClient({
       Transactions: [[...TRANSACTIONS_HEADER], duplicate, ghost, [...duplicate]],
       Allocations: [[...ALLOCATIONS_HEADER]],
@@ -374,33 +409,70 @@ describe("sheet mirror convergence", () => {
     expect((await mirrorOver(sheets).reconcile()).kind).toBe("synced");
 
     await expectConverged(sheets);
-    const ids = dataRows(sheets.snapshot("Transactions")).map((row) => row[0]);
-    expect(ids).toEqual(["t1"]);
+    expect(mirrorRows(sheets.snapshot("Transactions")).map((row) => row[0])).toEqual([T1]);
     // 清空而不是刪除列：列數不變。
     expect(sheets.snapshot("Transactions")).toHaveLength(4);
+  });
+
+  it("clears a stale mirror row but never a hand-typed one", async () => {
+    // 這條守的是一個比殭屍列嚴重得多的失敗模式：使用者貼幾列上個月的資料來比對、
+    // 在空白列寫給自己的備註，然後半夜的校正靜靜地把它們清掉——沒有警告，也拿不回來。
+    //
+    // 判準必須是「UUID 形狀」而不是「鍵欄非空」：真實 id 全部來自 randomUUID()，
+    // 所以 UUID 形狀剛好等於「這一列只可能是鏡像寫的」。少了這條測試，之後某次
+    // 重構會把規則悄悄放寬回去，而不會有任何東西反對。
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-10-05T00:00:01.000Z" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
+
+    const sheets = new FakeSheetsClient({
+      Transactions: [
+        [...TRANSACTIONS_HEADER],
+        rawRow(uuid("dead"), TRANSACTIONS_HEADER.length),
+        rawRow("我自己的備註", TRANSACTIONS_HEADER.length),
+        rawRow("上個月對帳用", TRANSACTIONS_HEADER.length),
+      ],
+      Allocations: [
+        [...ALLOCATIONS_HEADER],
+        rawRow(uuid("beef"), ALLOCATIONS_HEADER.length),
+        rawRow("這格是我自己算的", ALLOCATIONS_HEADER.length),
+      ],
+      MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
+    });
+
+    expect((await mirrorOver(sheets).reconcile()).kind).toBe("synced");
+
+    await expectConverged(sheets);
+    // 鏡像寫的殭屍列：清掉。
+    const transactionKeys = sheets.snapshot("Transactions").map((row) => row[0]);
+    expect(transactionKeys).not.toContain(uuid("dead"));
+    expect(sheets.snapshot("Allocations").map((row) => row[0])).not.toContain(uuid("beef"));
+    // 使用者手打的列：一格都不准動。
+    expect(transactionKeys).toContain("我自己的備註");
+    expect(transactionKeys).toContain("上個月對帳用");
+    expect(sheets.snapshot("Allocations").map((row) => row[0])).toContain("這格是我自己算的");
   });
 
   it("clears an allocation row whose allocation no longer exists", async () => {
     // updateTransaction 是「DELETE 全部配置再 INSERT」，所以改一筆交易之後舊的
     // allocation_id 就永遠消失了。這條走的是增量路徑：這個缺口不能只有每日校正
     // 才補得起來，不然使用者改完一筆帳，最多要等一天 Sheet 上的金額才會對。
-    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-05T00:00:01.000Z" });
-    addAllocation({ allocationId: "a1", transactionId: "t1", amount: "100" });
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-10-05T00:00:01.000Z" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
 
     const sheets = emptyWorkbook();
     const mirror = mirrorOver(sheets);
     await mirror.syncOnce();
-    expect(dataRows(sheets.snapshot("Allocations")).map((row) => row[0])).toEqual(["a1"]);
+    expect(mirrorRows(sheets.snapshot("Allocations")).map((row) => row[0])).toEqual([A1]);
 
-    database.prepare("DELETE FROM allocations WHERE transaction_id = 't1'").run();
-    addAllocation({ allocationId: "a1b", transactionId: "t1", amount: "150" });
-    touch("t1", { updatedAt: "2026-10-06T00:00:01.000Z", amount: "150" });
+    database.prepare("DELETE FROM allocations WHERE transaction_id = ?").run(T1);
+    addAllocation({ allocationId: A1B, transactionId: T1, amount: "150" });
+    touch(T1, { updatedAt: "2026-10-06T00:00:01.000Z", amount: "150" });
 
     expect((await mirror.syncOnce()).kind).toBe("synced");
 
     await expectConverged(sheets);
-    expect(dataRows(sheets.snapshot("Allocations")).map((row) => row[0])).toEqual(["a1b"]);
-    // a1 原本那一列被清空而不是刪除，所以分頁仍然是「標題 + 兩列」。
+    expect(mirrorRows(sheets.snapshot("Allocations")).map((row) => row[0])).toEqual([A1B]);
+    // A1 原本那一列被清空而不是刪除，所以分頁仍然是「標題 + 兩列」。
     expect(sheets.snapshot("Allocations")).toHaveLength(3);
   });
 });

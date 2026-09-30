@@ -37,6 +37,19 @@ export const RECONCILE_MAX_PAGES = 100;
 const blankRow = (width: number): SheetCell[] =>
   Array.from({ length: width }, (): SheetCell => ({ kind: "empty" }));
 
+/**
+ * 「這一列只可能是鏡像自己寫的」的判準。
+ *
+ * 交易 id 與配置 id 全部來自 `randomUUID()`，所以「UUID 形狀」剛好等於「來自鏡像」。
+ * 清理只動通過這個形狀檢查、而且 SQLite 裡已經找不到的列。
+ *
+ * 為什麼不是「鍵欄非空就清」：使用者會貼幾列上個月的資料來比對、會在空白列寫給自己
+ * 的備註。那些東西過不了 UUID 形狀檢查，必須原封不動留著——每天半夜靜靜地把使用者
+ * 手打的內容清掉，沒有警告也拿不回來，比它要修的殭屍列嚴重得多。要清的從來不是
+ * 「使用者加了東西」，而是「鏡像自己留下了來源已經不存在的列」。
+ */
+const MIRROR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface SheetMirrorDependencies {
   readonly ownerId: string;
   readonly sheets: SheetsClient;
@@ -175,6 +188,8 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
     const changedIds = new Set(changed.map((txn) => txn.transactionId));
     for (let i = 1; i < allocationKeys.length; i += 1) {
       const rowIndex = i + 1;
+      // 鍵欄不是 UUID 形狀就不是鏡像寫的，不管它掛在誰底下都不准動。
+      if (!MIRROR_ID.test(allocationKeys[i]?.[0] ?? "")) continue;
       if (!changedIds.has(allocationKeys[i]?.[1] ?? "")) continue;
       if (claimedAllocationRows.has(rowIndex)) continue;
       writes.push({
@@ -199,48 +214,66 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
   }
 
   /**
-   * 校正的收尾：清掉 Sheet 上已經沒有來源的列。
+   * 校正的收尾：清掉鏡像自己留下、但來源已經不存在的列。
    *
-   * 只有校正能做這件事，而且只有在全表真的掃完之後才能做：`knownIds` 是「SQLite
-   * 裡存在的所有交易」，判斷「不存在」必須拿完整的集合來比。增量同步只看得到一批
-   * 變更，拿那一批去比會把整張 Sheet 清光；校正被迭代上限截斷時同理，所以那種情形
-   * 直接跳過清理——少清一輪只是晚一天修好，清錯則是資料消失。
+   * 判準是兩個條件同時成立：鍵欄是 UUID 形狀（`MIRROR_ID`，代表這一列只可能是鏡像
+   * 寫的），而且那個 UUID 在 SQLite 裡找不到。使用者手打的內容過不了第一個條件，
+   * 一格都不會被動到。
+   *
+   * 只有校正能做這件事，而且只有在全表真的掃完之後才能做：`known` 是「SQLite 裡存在
+   * 的所有 id」，判斷「不存在」必須拿完整的集合來比。增量同步只看得到一批變更，拿那
+   * 一批去比會把整張 Sheet 清光；校正被迭代上限截斷時同理，所以那種情形直接跳過
+   * 清理——少清一輪只是晚一天修好，清錯則是資料消失。
    */
-  async function clearGhostRows(knownIds: ReadonlySet<string>): Promise<void> {
+  async function clearGhostRows(known: {
+    readonly transactions: ReadonlySet<string>;
+    readonly allocations: ReadonlySet<string>;
+  }): Promise<void> {
     const transactionKeys = await sheets.readColumns(TRANSACTIONS_TAB, 1);
-    const allocationKeys = await sheets.readColumns(ALLOCATIONS_TAB, 2);
+    const allocationKeys = await sheets.readColumns(ALLOCATIONS_TAB, 1);
     const writes: CellWrite[] = [];
 
-    // 同一個 id 出現多次時，定位表指向最後一列（引擎是後寫獲勝），較早那幾列
-    // 就再也不會被覆寫。留最後一列、清掉其餘的。
-    const lastRowOf = new Map<string, number>();
-    for (let i = 1; i < transactionKeys.length; i += 1) {
-      const key = transactionKeys[i]?.[0] ?? "";
-      if (key !== "") lastRowOf.set(key, i + 1);
-    }
-    for (let i = 1; i < transactionKeys.length; i += 1) {
-      const key = transactionKeys[i]?.[0] ?? "";
-      // 空白列本來就是清空的結果，再寫一次只是浪費配額。
-      if (key === "") continue;
-      const rowIndex = i + 1;
-      if (knownIds.has(key) && lastRowOf.get(key) === rowIndex) continue;
+    /**
+     * 一張分頁上該清掉的列號。
+     *
+     * 兩種殭屍列：來源已經不在 SQLite 的 id，以及同一個 id 的重複列——定位表指向
+     * 最後一列（引擎是後寫獲勝），較早那幾列再也不會被覆寫。
+     */
+    const ghostRowsOf = (
+      keys: readonly (readonly string[])[],
+      knownIds: ReadonlySet<string>,
+    ): number[] => {
+      const lastRowOf = new Map<string, number>();
+      for (let i = 1; i < keys.length; i += 1) {
+        const key = keys[i]?.[0] ?? "";
+        if (MIRROR_ID.test(key)) lastRowOf.set(key, i + 1);
+      }
+      const rows: number[] = [];
+      for (let i = 1; i < keys.length; i += 1) {
+        const key = keys[i]?.[0] ?? "";
+        // 不是 UUID 形狀就不是鏡像寫的：使用者貼的資料、寫給自己的備註，以及
+        // 已經被清空的列（空字串）都走這條，一律原封不動。
+        if (!MIRROR_ID.test(key)) continue;
+        const rowIndex = i + 1;
+        if (knownIds.has(key) && lastRowOf.get(key) === rowIndex) continue;
+        rows.push(rowIndex);
+      }
+      return rows;
+    };
+
+    for (const rowIndex of ghostRowsOf(transactionKeys, known.transactions)) {
       writes.push({
         tab: TRANSACTIONS_TAB,
         rowIndex,
         cells: blankRow(TRANSACTIONS_HEADER.length),
       });
     }
-
-    // 配置列的孤兒：transaction_id 已經不在 SQLite 裡（那一格是空的也算）。
-    // 掛在現有交易底下、但配置已經不存在的列由 buildWrites 負責——校正會處理到
-    // 每一筆交易，所以兩者合起來覆蓋了全部情形。
-    for (let i = 1; i < allocationKeys.length; i += 1) {
-      const row = allocationKeys[i] ?? [];
-      if ((row[0] ?? "") === "" && (row[1] ?? "") === "") continue;
-      if (knownIds.has(row[1] ?? "")) continue;
+    // 配置列同一套判準。掛在現有交易底下、但配置已經不存在的列由 buildWrites 清掉，
+    // 校正會處理到每一筆交易，所以兩者合起來覆蓋了全部情形。
+    for (const rowIndex of ghostRowsOf(allocationKeys, known.allocations)) {
       writes.push({
         tab: ALLOCATIONS_TAB,
-        rowIndex: i + 1,
+        rowIndex,
         cells: blankRow(ALLOCATIONS_HEADER.length),
       });
     }
@@ -264,8 +297,9 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
     const maxPages = mode === "reconcile" ? RECONCILE_MAX_PAGES : 1;
 
     const months = new Set<string>();
-    // 校正撈到的所有交易 id。走完全表才代表它是完整的，才能拿來判斷殭屍列。
-    const knownIds = new Set<string>();
+    // 校正撈到的所有 id。走完全表才代表它是完整的，才能拿來判斷殭屍列。
+    const knownTransactionIds = new Set<string>();
+    const knownAllocationIds = new Set<string>();
     let transactions = 0;
     let advanced: SyncCursor | null = null;
     let scannedToEnd = false;
@@ -284,7 +318,10 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
         // 一次全有全無的寫入。失敗就整輪不推進，下一輪重做同一批——重寫一列永遠安全。
         await sheets.updateCells(built.writes);
         for (const month of built.months) months.add(month);
-        for (const txn of changed) knownIds.add(txn.transactionId);
+        for (const txn of changed) {
+          knownTransactionIds.add(txn.transactionId);
+          for (const allocation of txn.allocations) knownAllocationIds.add(allocation.allocationId);
+        }
         transactions += changed.length;
 
         const last = changed[changed.length - 1] as MirrorTransaction;
@@ -299,7 +336,11 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
 
       if (advanced === null) return { kind: "idle" };
 
-      if (mode === "reconcile" && scannedToEnd) await clearGhostRows(knownIds);
+      if (mode === "reconcile" && scannedToEnd)
+        await clearGhostRows({
+          transactions: knownTransactionIds,
+          allocations: knownAllocationIds,
+        });
 
       // 游標只前進不後退：校正這一輪的最後一筆可能比持久游標還舊。
       const nextCursor = laterCursor(persisted, advanced);
