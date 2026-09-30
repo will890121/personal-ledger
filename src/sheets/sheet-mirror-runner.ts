@@ -27,11 +27,15 @@ export interface SheetMirrorRunnerDependencies {
    * 一個 vi.fn() 替身——兩邊的函式簽章相容。
    *
    * 訂正：這段註解原本寫「logger.ts import 了 grammY，而 src/sheets/ 不能依賴
-   * grammY」。前半句不成立——`src/logger.ts` 從來沒有 import 過 grammY（判斷
-   * GrammyError 的是 src/telegram/delivery-error.ts），同一個目錄下的
-   * sheet-mirror.ts 也一直都直接 import logger。邊界規則本身是真的，現在由
-   * eslint.config.mjs 的 no-restricted-imports zone 把關（src/sheets/ 與
-   * src/logger.ts 都不得 import grammY），不再只是註解裡的一句宣稱。
+   * grammY」，後來又被改寫成「`src/logger.ts` 從來沒有 import 過 grammY」——
+   * 兩句都不成立。`src/logger.ts` 一度真的 import 了 `GrammyError`（用
+   * `instanceof` 判斷錯誤形狀），那段時間 src/sheets/ 依邊界規則確實不能直接
+   * import 它，這裡注入 logError 在當時是必要的繞路。後來 logger.ts 改用鴨子
+   * 定型取代那個 `instanceof` 判斷，耦合就沒了；同一個目錄下的 sheet-mirror.ts
+   * 從那之後才開始直接 import logger（在此之前它也繞不過去）。這裡仍然注入，
+   * 現在是為了可測試性（tick 不用真的碰 logger 就能斷言記了什麼），不是為了
+   * 繞過依賴邊界——邊界規則現在由 eslint.config.mjs 的 no-restricted-imports
+   * zone 把關，不需要靠這段註解站崗。
    */
   readonly logError: (message: string, fields?: Record<string, unknown>) => void;
 }

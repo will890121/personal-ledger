@@ -16,8 +16,12 @@ import type { SheetSyncState } from "../ports/sheet-sync-repository.js";
  * no-restricted-imports zone 把關），只要一個能送訊息的東西；日誌也走注入的
  * logError，讓「送不出去時記什麼、記到哪」由呼叫端決定。
  *
- * 訂正：這段原本寫「不 import src/logger.ts（它 import 了 grammY）」——括號裡
- * 那句不成立，`src/logger.ts` 從來沒有 import 過 grammY。
+ * 訂正：這段原本寫「不 import src/logger.ts（它 import 了 grammY）」，後來又
+ * 被改寫成「`src/logger.ts` 從來沒有 import 過 grammY」——兩句都不成立。
+ * logger.ts 一度真的 import 了 grammY（判斷 GrammyError 用），那段時間才是這裡
+ * 改成注入 logError 的理由；後來 logger.ts 改用鴨子定型取代那個判斷，耦合就
+ * 沒了。現在繼續注入，是為了可測試性，不是為了繞開依賴邊界——依賴邊界現在由
+ * eslint.config.mjs 的 no-restricted-imports zone 把關。
  */
 
 /** 刻意收窄：告警一律送新訊息，用不到 editMessageText。 */
