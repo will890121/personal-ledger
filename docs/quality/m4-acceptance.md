@@ -168,7 +168,9 @@ Claude 在主機上執行並記錄於下。
 升級 `needs_attention`、告警、手動重試全部）在日誌裡**沒有留下任何一行**。`/status` 是
 M4 設計的可觀測性介面且運作正常，但它顯示的是當下狀態，事故結束後就不留痕跡，因此
 事後無法回答「這種情況發生過幾次」。這不在 AC-20／23／24／28 之列，不擋這個里程碑，
-已開 [`docs/todo/outbox-delivery-logging.md`](../todo/outbox-delivery-logging.md) 排入 M5 前段。
+已開 `docs/todo/outbox-delivery-logging.md` 排入 M5 前段——該項待辦已於 M5a 完成
+（兩條管線的遞送事故都留下日誌痕跡），並依它自己的完成定義關閉；現在守住這個行為的
+是 `tests/sheets/sheet-mirror-logging.test.ts` 與 `tests/telegram/outbox-logging.test.ts`。
 
 （人工驗收執行後在此補上；依完成定義，發現的缺陷一律先補回歸測試再修，不直接改行為。）
 

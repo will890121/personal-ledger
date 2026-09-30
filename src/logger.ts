@@ -55,17 +55,30 @@ function redactString(value: string): string {
   return value.replace(BOT_TOKEN_PATTERN, "***");
 }
 
-// grammY 的 GrammyError 形狀：{ error_code: number, description: string }。用鴨子
-// 定型判斷而不是 `instanceof GrammyError`——這個檔案是全專案唯一的日誌出口，
-// import grammY 只為了認出一種錯誤形狀，會讓不該依賴 grammY 的地方（例如
-// src/sheets/）也沒辦法呼叫這裡（見本檔案的邊界說明）。只看兩個欄位的形狀，
-// 不看建構子，就不必知道 grammY 存在。
-function isTelegramApiError(
-  error: unknown,
-): error is { readonly error_code: number; readonly description: string } {
+// grammY 的 GrammyError 實際欄位：method、payload、ok、name、error_code、
+// description、parameters。用鴨子定型判斷而不是 `instanceof GrammyError`——
+// 這個檔案是全專案唯一的日誌出口，import grammY 只為了認出一種錯誤形狀，會讓
+// 不該依賴 grammY 的地方（例如 src/sheets/）也沒辦法呼叫這裡（見本檔案的邊界
+// 說明）。只看欄位的形狀，不看建構子，就不必知道 grammY 存在。
+//
+// 只檢查 error_code、description 兩個欄位太鬆：一個普通物件只要剛好帶著同名
+// 欄位就會被誤判成 Telegram 錯誤，而 description 會被 describeError 原樣印出——
+// 繞過「只有 name === 'Error' 才記錄 message」那道安全網。因此再加上 method
+// （字串），並且三個欄位都檢查型別而不是只檢查存在：一個隨機物件同時帶著
+// error_code（number）、description（string）、method（string）三者的機率
+// 極低，真正的 GrammyError 一定三者俱全。
+function isTelegramApiError(error: unknown): error is {
+  readonly error_code: number;
+  readonly description: string;
+  readonly method: string;
+} {
   if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { error_code?: unknown; description?: unknown };
-  return typeof candidate.error_code === "number" && typeof candidate.description === "string";
+  const candidate = error as { error_code?: unknown; description?: unknown; method?: unknown };
+  return (
+    typeof candidate.error_code === "number" &&
+    typeof candidate.description === "string" &&
+    typeof candidate.method === "string"
+  );
 }
 
 // 錯誤訊息可能夾帶 SQL 片段（SqliteError）或使用者輸入的財務原文（ZodError 會回填實際值），

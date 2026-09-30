@@ -16,8 +16,13 @@ function capture(): { logger: typeof logger; lines: string[] } {
   return { logger, lines };
 }
 
-// 組出一個真正的 GrammyError,而不是隨便捏造一個同名欄位的物件——
-// describeError 是用 instanceof GrammyError 判斷,不是看欄位長相。
+// 組出一個真正的 GrammyError,而不是隨便捏造一個同名欄位的物件——雖然
+// describeError 現在是用鴨子定型（檢查 error_code、description、method 三個
+// 欄位的型別）判斷,不是 instanceof,這裡還是用真正的建構子產生測試資料,
+// 這樣測試才是在驗證「真正的 GrammyError 會被正確辨識」,而不是隨便湊出
+// 一個形狀相符的假物件。logger 之所以不能用 instanceof GrammyError：這個檔案
+// 是全專案唯一的日誌出口,src/sheets/ 也要呼叫它記錄錯誤,但不得依賴 grammY，
+// 所以只能靠檢查欄位形狀來辨認 Telegram 錯誤。
 function grammyError(errorCode: number, description: string): GrammyError {
   return new GrammyError(
     "Call to 'sendMessage' failed!",
@@ -89,6 +94,24 @@ describe("logger", () => {
     logger.error("遞送失敗", { error: grammyError(400, "Bad Request: message is not modified") });
 
     expect(lines.join("\n")).toContain("message is not modified");
+  });
+
+  // Task 12 fix 1：只帶 error_code、description 兩個欄位、沒有 method 的物件
+  // 不是 GrammyError——只看這兩個欄位太鬆，任何剛好帶著同名欄位的普通物件都會
+  // 被誤判成 Telegram 錯誤，而 description 會被原樣印出，繞過「只有
+  // name === 'Error' 才記錄 message」那道安全網。加上 method 之後這個物件要走
+  // describeError 的預設分支：不是 Error 實例，只留 UnknownError，description
+  // 完全不出現在日誌裡。
+  it("does not treat an object with only error_code and description as a Telegram error", () => {
+    const { logger, lines } = capture();
+
+    logger.warn("test", {
+      error: { error_code: 500, description: "SECRET-FINANCIAL-TEXT-account-12345", name: "X" },
+    });
+
+    const output = lines.join("\n");
+    expect(output).not.toContain("SECRET-FINANCIAL-TEXT-account-12345");
+    expect(output).not.toContain("GrammyError");
   });
 
   // I4：error 這個鍵名原本是唯一明確跳過遮罩的路徑——describeError 的結果直接寫出去，
