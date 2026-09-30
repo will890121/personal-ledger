@@ -14,8 +14,25 @@ import { classifyDeliveryError } from "./delivery-error.js";
  *
  * 已知且接受的重複：送出成功、但在 markOutboxDelivered 落地前行程死掉，
  * lease 過期後會被同一個迴圈再送一次——帳本只有一筆、使用者看到兩則訊息。
- * 寧可重複也不要遺失；lease 的長度就是這個重複的上限，不會無限重複——這句保證
- * 靠的是 SEND_TIMEOUT_MS < LEASE_MS（見下），不是 lease 本身。
+ * 寧可重複也不要遺失。
+ *
+ * 重複的界線到底是什麼，講清楚（這裡曾經寫著「lease 的長度就是這個重複的上限」，
+ * 那是一句沒有人在檢查的斷言，而且不成立）：
+ *
+ *   - **一次送出**有界：每個 API 呼叫都帶 SEND_TIMEOUT_MS 的 AbortSignal，
+ *     且 SEND_TIMEOUT_MS 必須始終小於 LEASE_MS（見下面那個常數的說明）。
+ *   - **一列不是嚴格有界**：一次 drain 用**同一個** leaseUntil 一口氣 claim 最多
+ *     BATCH 列，然後循序送出。排在批次後段的列，lease 可能在輪到它送的途中就過期，
+ *     於是被下一輪 drain 重新 claim——同一列因此仍可能有第二次併發送出。
+ *     實測（3 列卡住）：每列 2 次併發；在加上 SEND_TIMEOUT_MS 之前是 6 次。
+ *   - **資料狀態不受影響**：遲到的 worker 手上是過期的 lease 值，三個 markOutbox*
+ *     的 compare-and-set 會擋掉它的寫入，告警也一併被擋（見 notifyIfOwned）。
+ *     會被使用者看見的只有「同一則訊息送兩次」，而且僅限沒有 targetMessageId 的
+ *     訊息——有 target 的重複會被 Telegram 用 message is not modified 擋掉，
+ *     delivery-error.ts 正確地把它當成已送達。
+ *
+ * 要讓「一列」也嚴格有界，得在每一列送出前重新續租（連 lease token 一起更新），
+ * 那是對並發核心的設計變更，不是註解能解決的事：見 docs/todo/outbox-per-row-lease.md。
  */
 
 export const LEASE_MS = 30_000;
@@ -23,8 +40,8 @@ const BATCH = 10;
 export const DRAIN_INTERVAL_MS = 5_000;
 
 /**
- * 每一次送出呼叫自己的逾時。**必須始終小於 LEASE_MS**：上面那句「lease 的長度就是
- * 這個重複的上限」只有在「一次送出不可能活得比 lease 久」時才成立。
+ * 每一次送出呼叫自己的逾時。**必須始終小於 LEASE_MS**：上面「一次送出有界」那一條
+ * 就是這個關係本身，一旦反過來，那一條也跟著失效。
  *
  * 少了它，卡住的 HTTP 呼叫會用 grammY 的預設 500 秒逾時，也就是比 lease 多活 470 秒：
  * 期間每一輪 drain（5 秒一次）都會在 lease 過期後重新 claim 同一列再送一次，
