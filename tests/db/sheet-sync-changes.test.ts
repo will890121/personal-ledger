@@ -129,6 +129,25 @@ describe("listChangedTransactions", () => {
     expect(rows.map((row) => row.transactionId)).toEqual(["t1", "t2"]);
   });
 
+  it("does not re-deliver a transaction sorting before the cursor within the same millisecond", async () => {
+    // Review Focus #4 的另一半：t0 < t1 < t2 共用同一個 updated_at 毫秒值，
+    // 上一輪在 t1 停下，游標是 (該毫秒, "t1")。外層比較若誤寫成
+    // updated_at >= cursor，整個 OR 分支會被 updated_at 這一半吃掉——退化成
+    // 純粹的 updated_at >= cursor，t0 因為時間相同而被重新撈出，且每一輪都會
+    // 再撈一次，永遠重工。正確結果應該排除 t0，只留 t1、t2。
+    seedTransaction(database, { id: "t0", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, { id: "t2", updatedAt: "2026-10-01T00:00:00.000Z" });
+
+    const rows = await repository.listChangedTransactions(
+      OWNER,
+      { updatedAt: "2026-10-01T00:00:00.000Z", transactionId: "t1" },
+      100,
+    );
+
+    expect(rows.map((row) => row.transactionId)).toEqual(["t1", "t2"]);
+  });
+
   it("orders by (updated_at, transaction_id) so the cursor is well defined", async () => {
     seedTransaction(database, { id: "tb", updatedAt: "2026-10-01T00:00:00.000Z" });
     seedTransaction(database, { id: "ta", updatedAt: "2026-10-01T00:00:00.000Z" });
