@@ -64,18 +64,20 @@ export class FakeSheetsClient implements SheetsClient {
       if (header !== undefined && write.cells.length !== header.length) {
         return Promise.reject(
           new Error(
-            `column count mismatch on ${write.tab} row ${write.rowIndex}: ` +
-              `expected ${header.length} cells (header width), got ${write.cells.length}`,
+            `column count mismatch on ${write.tab} row ${String(write.rowIndex)}: ` +
+              `expected ${String(header.length)} cells (header width), got ${String(write.cells.length)}`,
           ),
         );
       }
 
       // 同一批裡兩筆寫到同一列，代表引擎的列號算錯了。真實情境下這種批次
       // 不合法——引擎本來就只寫完整的列，合法用法不會撞到這條規則。
-      const rowKey = `${write.tab}:${write.rowIndex}`;
+      const rowKey = `${write.tab}:${String(write.rowIndex)}`;
       if (seenRows.has(rowKey)) {
         return Promise.reject(
-          new Error(`duplicate write to ${write.tab} row ${write.rowIndex} in the same batch`),
+          new Error(
+            `duplicate write to ${write.tab} row ${String(write.rowIndex)} in the same batch`,
+          ),
         );
       }
       seenRows.add(rowKey);

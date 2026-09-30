@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  ALLOCATIONS_HEADER,
+  MONTHLY_SUMMARY_HEADER,
+  TRANSACTIONS_HEADER,
+} from "../../src/domain/sheet-rows.js";
 import { toSheetSerialDate } from "../../src/domain/sheet-serial-date.js";
 import type {
   MirrorTransaction,
@@ -73,9 +78,9 @@ function harness(options: {
   const summaryRepository = { summarize } as unknown as SummaryRepository;
   const sheets = new FakeSheetsClient(
     options.sheet ?? {
-      Transactions: [["transaction_id", "日期"]],
-      Allocations: [["allocation_id"]],
-      MonthlySummary: [["月份"]],
+      Transactions: [[...TRANSACTIONS_HEADER]],
+      Allocations: [[...ALLOCATIONS_HEADER]],
+      MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
     },
   );
   const mirror = createSheetMirror({
@@ -106,12 +111,9 @@ describe("sheet mirror", () => {
     const { mirror, sheets } = harness({
       changed: [transaction({ amount: "999" })],
       sheet: {
-        Transactions: [
-          ["transaction_id", "日期"],
-          ["t1", String(toSheetSerialDate("2026-10-05"))],
-        ],
-        Allocations: [["allocation_id"]],
-        MonthlySummary: [["月份"]],
+        Transactions: [[...TRANSACTIONS_HEADER], ["t1", String(toSheetSerialDate("2026-10-05"))]],
+        Allocations: [[...ALLOCATIONS_HEADER]],
+        MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
       },
     });
 
@@ -130,12 +132,12 @@ describe("sheet mirror", () => {
       changed: [transaction({ amount: "777" })],
       sheet: {
         Transactions: [
-          ["transaction_id", "日期"],
+          [...TRANSACTIONS_HEADER],
           ["使用者自己插入的一列", ""],
           ["t1", String(toSheetSerialDate("2026-10-05"))],
         ],
-        Allocations: [["allocation_id"]],
-        MonthlySummary: [["月份"]],
+        Allocations: [[...ALLOCATIONS_HEADER]],
+        MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
       },
     });
 
@@ -165,12 +167,9 @@ describe("sheet mirror", () => {
     const { mirror, summarize } = harness({
       changed: [transaction({ occurredDate: "2026-10-05" })],
       sheet: {
-        Transactions: [
-          ["transaction_id", "日期"],
-          ["t1", String(toSheetSerialDate("2026-09-28"))],
-        ],
-        Allocations: [["allocation_id"]],
-        MonthlySummary: [["月份"]],
+        Transactions: [[...TRANSACTIONS_HEADER], ["t1", String(toSheetSerialDate("2026-09-28"))]],
+        Allocations: [[...ALLOCATIONS_HEADER]],
+        MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
       },
     });
 
