@@ -1,6 +1,12 @@
 import type Database from "better-sqlite3";
 
-import type { SheetSyncRepository, SheetSyncState } from "../ports/sheet-sync-repository.js";
+import type {
+  MirrorAllocation,
+  MirrorTransaction,
+  SheetSyncRepository,
+  SheetSyncState,
+  SyncCursor,
+} from "../ports/sheet-sync-repository.js";
 
 interface SheetSyncStateRow {
   owner_id: string;
@@ -10,6 +16,34 @@ interface SheetSyncStateRow {
   last_error: string | null;
   consecutive_failures: number;
   last_reconciled_at: string | null;
+}
+
+interface TransactionRow {
+  transaction_id: string;
+  occurred_date: string;
+  occurred_time: string | null;
+  amount: string;
+  account_from_name: string | null;
+  account_to_name: string | null;
+  merchant_name: string | null;
+  counterparty_name: string | null;
+  note: string | null;
+  raw_input_snapshot: string | null;
+  status: string;
+  confirmed_at: string;
+  updated_at: string;
+}
+
+interface AllocationRow {
+  allocation_id: string;
+  transaction_id: string;
+  funds_effect: string;
+  purpose: string;
+  amount: string;
+  category_snapshot: string;
+  subcategory_snapshot: string | null;
+  counterparty_name: string | null;
+  note: string | null;
 }
 
 export class SqliteSheetSyncRepository implements SheetSyncRepository {
@@ -69,5 +103,91 @@ export class SqliteSheetSyncRepository implements SheetSyncRepository {
         state.lastReconciledAt,
       );
     return Promise.resolve();
+  }
+
+  public listChangedTransactions(
+    ownerId: string,
+    cursor: SyncCursor | null,
+    limit: number,
+  ): Promise<MirrorTransaction[]> {
+    // 游標語意刻意是 >=：兩列可能共用同一個 updated_at 毫秒值，用 > 會讓排在游標
+    // 後面、但時間相同的那一列永遠被跳過（它的時間之後不會再變）。重寫邊界那一列
+    // 是冪等的，代價為零。
+    const cursorClause = cursor
+      ? "AND (t.updated_at > @cursorUpdatedAt OR (t.updated_at = @cursorUpdatedAt AND t.transaction_id >= @cursorTransactionId))"
+      : "";
+
+    const transactionRows = this.database
+      .prepare(
+        `SELECT t.transaction_id, t.occurred_date, t.occurred_time, t.amount,
+                af.name AS account_from_name, at2.name AS account_to_name,
+                m.name AS merchant_name, cp.name AS counterparty_name,
+                t.note, t.raw_input_snapshot, t.status, t.confirmed_at, t.updated_at
+         FROM transactions t
+         LEFT JOIN accounts af ON af.account_id = t.account_from_id
+         LEFT JOIN accounts at2 ON at2.account_id = t.account_to_id
+         LEFT JOIN merchants m ON m.merchant_id = t.merchant_id
+         LEFT JOIN counterparties cp ON cp.counterparty_id = t.counterparty_id
+         WHERE t.owner_id = @ownerId ${cursorClause}
+         ORDER BY t.updated_at, t.transaction_id
+         LIMIT @limit`,
+      )
+      .all({
+        ownerId,
+        limit,
+        cursorUpdatedAt: cursor?.updatedAt ?? null,
+        cursorTransactionId: cursor?.transactionId ?? null,
+      }) as TransactionRow[];
+
+    if (transactionRows.length === 0) return Promise.resolve([]);
+
+    const ids = transactionRows.map((row) => row.transaction_id);
+    const placeholders = ids.map(() => "?").join(", ");
+    const allocationRows = this.database
+      .prepare(
+        `SELECT a.allocation_id, a.transaction_id, a.funds_effect, a.purpose, a.amount,
+                a.category_snapshot, a.subcategory_snapshot,
+                cp.name AS counterparty_name, a.note
+         FROM allocations a
+         LEFT JOIN counterparties cp ON cp.counterparty_id = a.counterparty_id
+         WHERE a.transaction_id IN (${placeholders})
+         ORDER BY a.transaction_id, a.rowid`,
+      )
+      .all(...ids) as AllocationRow[];
+
+    const byTransaction = new Map<string, MirrorAllocation[]>();
+    for (const row of allocationRows) {
+      const list = byTransaction.get(row.transaction_id) ?? [];
+      list.push({
+        allocationId: row.allocation_id,
+        fundsEffect: row.funds_effect,
+        purpose: row.purpose,
+        amount: row.amount,
+        categoryName: row.category_snapshot,
+        subcategoryName: row.subcategory_snapshot,
+        counterpartyName: row.counterparty_name,
+        note: row.note,
+      });
+      byTransaction.set(row.transaction_id, list);
+    }
+
+    return Promise.resolve(
+      transactionRows.map((row) => ({
+        transactionId: row.transaction_id,
+        occurredDate: row.occurred_date,
+        occurredTime: row.occurred_time,
+        amount: row.amount,
+        accountFromName: row.account_from_name,
+        accountToName: row.account_to_name,
+        merchantName: row.merchant_name,
+        counterpartyName: row.counterparty_name,
+        note: row.note,
+        rawInputSnapshot: row.raw_input_snapshot,
+        status: row.status,
+        confirmedAt: row.confirmed_at,
+        updatedAt: row.updated_at,
+        allocations: byTransaction.get(row.transaction_id) ?? [],
+      })),
+    );
   }
 }
