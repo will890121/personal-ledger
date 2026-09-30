@@ -135,13 +135,31 @@ Telegram 會收到「⚠️ Sheets 鏡像連續失敗」。
   `SHEET_SPREADSHEET_ID` 時拒絕執行 —— 那組測試會清空並重寫三張分頁，
   指向使用者真正在看的那張表不是測試失敗，是資料消失。
   **這一項與 AC 並列，不是選配**：要在完成上面「三步設定」之後，另外開一張
-  拋棄式試算表（同樣要有三張分頁、同樣分享給服務帳號），然後
+  拋棄式試算表（同樣要有三張分頁、同樣分享給服務帳號），然後**先把 `.env` 載進
+  這個 shell**：
 
   ```bash
+  set -a; . ./.env; set +a
   GOOGLE_SERVICE_ACCOUNT_KEY_FILE=./secrets/google-service-account.json \
   SHEETS_TEST_SPREADSHEET_ID=<拋棄式試算表 id> \
     pnpm test:sheets
   ```
+
+  **`set -a; . ./.env; set +a` 這一行不能省。** 專案裡沒有任何東西會載入 `.env`
+  （沒有 dotenv）；下面這條測試唯一防止清空正式試算表的保護——
+  `SHEETS_TEST_SPREADSHEET_ID` 等於正式的 `SHEET_SPREADSHEET_ID` 時拒絕執行——
+  比對的是**這個 shell 裡**的兩個環境變數。少了這一行，`SHEET_SPREADSHEET_ID`
+  根本不在這個 shell 裡，守衛看不到正式 id、永遠不會開火：如果為了省事把正式 id
+  複製到 `SHEETS_TEST_SPREADSHEET_ID`（例如直接抄第 3 步剛填過的值），流程會直接
+  清空並重寫三張真實分頁，中間不會有任何提示，而且無法還原。測試本身在真正動手
+  清空之前也會印出它要清空的試算表 id；如果 `SHEET_SPREADSHEET_ID` 這時仍未設定
+  （因此測試無法替你比對），它會另外大聲印出「我無法確認這不是你的正式試算表」——
+  看到這行就代表上面的載入沒生效，該中止。
+
+  上面這行金鑰路徑用的是**主機**路徑（`./secrets/...`），跟第 3 步 `.env` 裡寫的
+  容器內路徑（`/app/secrets/...`）不一樣：那一份 `.env` 給的是**跑在容器裡的 bot**
+  用的路徑，這裡假設你是在主機上直接執行 `pnpm test:sheets`，兩者的檔案系統基準點
+  不同，各自對才是對的——不要把其中一種路徑抄到另一個情境裡。
 
   結案前必須看到它 exit 0。
 - **AC-21（Sheet 暫時失敗 → 正式入帳成功，Sheet 工作安全重試）**：

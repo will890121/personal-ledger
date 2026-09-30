@@ -91,6 +91,15 @@ function requireIntegrationEnvironment(): { keyFile: string; spreadsheetId: stri
 const { keyFile, spreadsheetId } = requireIntegrationEnvironment();
 
 /**
+ * `requireIntegrationEnvironment` 只在「兩個變數的值相等」時拒絕執行。沒被拒絕
+ * **不代表已經確認安全**——也可能是因為 `SHEET_SPREADSHEET_ID` 根本沒進到這個
+ * 行程裡（忘了先 `set -a; . ./.env; set +a` 就把值帶進 shell，或這台機器本來就
+ * 沒有設定正式試算表）。這兩種情況都要在 `clearWorkbook()` 真正動手之前大聲說
+ * 出來，而不是靜默通過——「我無法確認這不是你的正式試算表」比靜默安全得多。
+ */
+const productionSpreadsheetId = process.env[PRODUCTION_SPREADSHEET_VARIABLE]?.trim();
+
+/**
  * 未經任何裝飾包過的真實 client。
  *
  * 清空分頁、擺放「使用者手動改壞」的內容、以及讀回來比對，全部走這一條——它們不該
@@ -146,6 +155,21 @@ async function readWorkbook(client: SheetsClient): Promise<Workbook> {
  * 而真正該做的事是「去那張試算表上把分頁建出來」。
  */
 async function clearWorkbook(): Promise<void> {
+  // 在真正動手之前，先印出它即將清空的試算表 id——這是真正會清資料的一步，
+  // 不能無聲無息地就做下去。
+  console.error(
+    `[test:sheets] 即將清空試算表 ${spreadsheetId} 的 ${TRANSACTIONS_TAB}／` +
+      `${ALLOCATIONS_TAB}／${MONTHLY_SUMMARY_TAB} 三張分頁 —— 每一列目前有內容的都會被整列清空。`,
+  );
+  if (productionSpreadsheetId === undefined || productionSpreadsheetId === "") {
+    // 不因為未設就拒絕執行：一台沒有正式設定的機器應該仍然可以跑這組測試。
+    // 但既然沒有東西可以比對，就必須大聲說出「無法確認」，而不是假裝已經查過。
+    console.error(
+      `[test:sheets] ${PRODUCTION_SPREADSHEET_VARIABLE} 未設定，我無法確認 ${spreadsheetId} ` +
+        `不是你的正式試算表。如果這是正式試算表，現在就按 Ctrl+C 中止，改用一張拋棄式 ` +
+        `試算表的 id 填進 ${TEST_SPREADSHEET_VARIABLE}。`,
+    );
+  }
   const writes: CellWrite[] = [];
   for (const [tab, width] of TAB_WIDTHS) {
     let rows: string[][];

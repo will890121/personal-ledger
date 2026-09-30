@@ -30,4 +30,15 @@ export default defineConfig([
       "no-console": "off",
     },
   },
+  {
+    // 這一個檔案的 console.error 不是應用程式日誌，是印給正在手動執行
+    // `pnpm test:sheets` 的人看的：在真正清空試算表之前，把它即將清空的 id
+    // 印出來、以及正式試算表變數缺席時大聲說「我無法確認」。走 src/logger.ts
+    // 反而是錯的——logger 的拒絕清單本來就會遮掉 spreadsheetId，而這裡的目的
+    // 正好是要讓人看見它。
+    files: ["tests/integration/sheets.integration.test.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 ]);
