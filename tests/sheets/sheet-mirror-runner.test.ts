@@ -26,7 +26,7 @@ import { FakeSheetsClient } from "../support/fake-sheets-client.js";
 const OWNER = "owner-1";
 const TZ = "Asia/Taipei";
 
-function transaction(id: string): MirrorTransaction {
+function transaction(id: string, updatedAt = "2026-10-05T00:00:00.000Z"): MirrorTransaction {
   return {
     transactionId: id,
     occurredDate: "2026-10-05",
@@ -40,7 +40,7 @@ function transaction(id: string): MirrorTransaction {
     rawInputSnapshot: null,
     status: "confirmed",
     confirmedAt: "2026-10-05T00:00:00.000Z",
-    updatedAt: "2026-10-05T00:00:00.000Z",
+    updatedAt,
     allocations: [],
   };
 }
@@ -158,6 +158,94 @@ function mirrorHarness(options: {
   };
   const runner = createSheetMirrorRunner(deps);
   return { runner, mirror: { syncOnce, reconcile }, logError };
+}
+
+/**
+ * 真的引擎，而且倉儲每一批都剛好撈滿——用一個很小的 `reconcileMaxPages` 逼出
+ * 「校正被 RECONCILE_MAX_PAGES 截斷」那條路徑，不必真的 seed 兩萬筆交易
+ * （RECONCILE_MAX_PAGES × SYNC_BATCH 是兩萬）。
+ *
+ * 用真引擎而不是 `vi.fn()` 的替身：這裡要驗的正是「引擎的截斷語意」與
+ * 「排程器的每日判斷」合不合得起來——兩道守衛各自都對，合起來卻會鎖死，
+ * 而替身沒有截斷語意可言。`syncOnce`／`reconcile` 外面再包一層 spy，
+ * 才看得出每一輪走的是哪一條路。
+ */
+function truncationHarness(): {
+  runner: ReturnType<typeof createSheetMirrorRunner>;
+  mirror: { syncOnce: ReturnType<typeof vi.fn>; reconcile: ReturnType<typeof vi.fn> };
+  state: SheetSyncState;
+  setNow: (iso: string) => void;
+} {
+  let nowIso = "2026-10-01T20:10:00.000Z"; // Asia/Taipei 2026-10-02 04:10，過了 RECONCILE_HOUR
+  const state: SheetSyncState = {
+    ownerId: OWNER,
+    cursorUpdatedAt: null,
+    cursorTransactionId: null,
+    lastSuccessAt: null,
+    lastError: null,
+    consecutiveFailures: 0,
+    lastReconciledAt: null,
+  };
+  let issued = 0;
+  const syncRepository: SheetSyncRepository = {
+    loadSyncState: () => Promise.resolve({ ...state }),
+    saveSyncState: (next) => {
+      Object.assign(state, next);
+      return Promise.resolve();
+    },
+    // 每一批都剛好 limit 筆、游標永遠還有下一頁：這就是「帳本大到掃不完」在
+    // 測試裡的等價物。id 與 updated_at 全域遞增，不會在同一批裡撞到同一列。
+    listChangedTransactions: (_ownerId, _cursor, limit) => {
+      const batch = Array.from({ length: limit }, (_unused, index) => {
+        const serial = issued + index;
+        return transaction(
+          `txn-${String(serial)}`,
+          new Date(Date.parse("2026-10-05T00:00:00.000Z") + serial * 1000).toISOString(),
+        );
+      });
+      issued += limit;
+      return Promise.resolve(batch);
+    },
+    loadAlertAt: () => Promise.resolve(null),
+    saveAlertAt: () => Promise.resolve(),
+  };
+  const summaryRepository = {
+    summarize: () => Promise.resolve(ZERO_SUMMARY),
+  } as unknown as SummaryRepository;
+  const sheets = new FakeSheetsClient({
+    Transactions: [[...TRANSACTIONS_HEADER]],
+    Allocations: [[...ALLOCATIONS_HEADER]],
+    MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
+  });
+  const engine = createSheetMirror({
+    ownerId: OWNER,
+    sheets,
+    syncRepository,
+    summaryRepository,
+    now: () => new Date(nowIso),
+    // 只給測試用的上限（正式環境用 RECONCILE_MAX_PAGES＝100）：兩頁就撞到保險絲。
+    reconcileMaxPages: 2,
+  });
+  const mirror = {
+    syncOnce: vi.fn(() => engine.syncOnce()),
+    reconcile: vi.fn(() => engine.reconcile()),
+  };
+  const runner = createSheetMirrorRunner({
+    mirror,
+    syncRepository,
+    ownerId: OWNER,
+    timezone: TZ,
+    now: () => new Date(nowIso),
+    logError: vi.fn(),
+  });
+  return {
+    runner,
+    mirror,
+    state,
+    setNow: (iso) => {
+      nowIso = iso;
+    },
+  };
 }
 
 describe("sheet mirror runner", () => {
@@ -310,6 +398,45 @@ describe("sheet mirror runner", () => {
 
     resolveReconcile({ kind: "idle" });
     await first;
+  });
+
+  it("does not reconcile again after a truncated reconcile, and goes back to incremental", async () => {
+    // 兩道截斷守衛在正確性上合得起來、在活性上合不起來：`lastReconciledAt` 只在
+    // 掃完全表時才蓋（/status 的誠實），而每日判斷若只看它，被截斷的那一輪就等於
+    // 「今天還沒校正」——下一個 tick 又校正、又截斷、又不蓋時間戳。實測 10 次
+    // syncNow()：reconcile 10 次、syncOnce 0 次、時間戳十輪都沒前進，而且不會
+    // 自己恢復：使用者 04:00 之後記的帳整天都不會出現在試算表上。
+    const harness = truncationHarness();
+
+    const first = await harness.runner.syncNow();
+
+    // 這一輪真的是「被截斷的校正」：synced 但沒掃到盡頭。
+    expect(first).toMatchObject({ kind: "synced", scannedToEnd: false });
+    expect(harness.mirror.reconcile).toHaveBeenCalledOnce();
+    // 截斷不蓋 lastReconciledAt——這條語意刻意不動，/status 不能把沒驗完的一輪
+    // 說成校正完成。
+    expect(harness.state.lastReconciledAt).toBeNull();
+
+    await harness.runner.syncNow();
+    await harness.runner.syncNow();
+
+    expect(harness.mirror.reconcile).toHaveBeenCalledOnce();
+    expect(harness.mirror.syncOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("still reconciles the next day after a truncated reconcile", async () => {
+    // 標記必須是「今天試過了」而不是「永遠不用再試」：校正是自我修復的唯一入口
+    // （spec §2、§9），少了它，被手動改壞的列就再也沒有人會修。
+    const harness = truncationHarness();
+    await harness.runner.syncNow();
+    await harness.runner.syncNow();
+    expect(harness.mirror.reconcile).toHaveBeenCalledOnce();
+
+    harness.setNow("2026-10-02T20:10:00.000Z"); // Asia/Taipei 2026-10-03 04:10（隔天）
+
+    await harness.runner.syncNow();
+
+    expect(harness.mirror.reconcile).toHaveBeenCalledTimes(2);
   });
 
   it("exposes RECONCILE_HOUR as 4", () => {

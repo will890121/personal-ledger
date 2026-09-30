@@ -50,7 +50,20 @@ export interface SheetMirrorRunner {
 
 /**
  * 判斷這一輪該不該走校正：現在的時數（依設定時區）已經過了 RECONCILE_HOUR，
- * 而且今天（同樣依設定時區）還沒校正過。
+ * 而且今天（同樣依設定時區）既沒有校正**完成**、也沒有校正**嘗試**過。
+ *
+ * 為什麼要分成兩個條件：`lastReconciledAt` 只在校正真的掃完全表（`scannedToEnd`）
+ * 時才蓋——那是 `/status` 誠實的基礎，被 RECONCILE_MAX_PAGES 截斷的一輪不能
+ * 算成功。但拿同一個時間戳當排程條件就會鎖死：截斷的校正不蓋時間戳，下一個
+ * tick 於是又判定該校正，再截斷、再不蓋……20 秒一輪永遠重複，增量同步整天
+ * 一次都輪不到。實測 10 次 syncNow()：reconcile 10 次、syncOnce 0 次、
+ * 時間戳十輪都沒前進。門檻是帳本超過 RECONCILE_MAX_PAGES × SYNC_BATCH＝兩萬筆，
+ * 而校正從最舊的一筆開始分頁，所以被截斷時最新的帳永遠掃不到——使用者從 04:00
+ * 到午夜記的帳完全不會上試算表，而且不會自己恢復（AC-22 在此狀態下不成立）。
+ *
+ * 兩個條件都要看，不是換掉：`attemptedDate` 活在行程內（見
+ * `createSheetMirrorRunner` 的說明），重啟後是空的；若只看它，正式環境每次
+ * 重啟都會無條件再校正一次，連「今天已經完整校正過」也照跑。
  *
  * 日期與時數一律經 `src/timezone.ts` 換算，不自己用 UTC 小時或 `Date` 的
  * 本地方法算——host 容器的系統時區不保證是使用者設定的 TZ，八小時的時差會讓
@@ -59,13 +72,16 @@ export interface SheetMirrorRunner {
  */
 function shouldReconcileToday(
   lastReconciledAt: string | null,
+  attemptedDate: string | null,
   now: Date,
   timezone: string,
 ): boolean {
   const currentHour = Number(timeOfDayInTimezone(now, timezone).slice(0, 2));
   if (currentHour < RECONCILE_HOUR) return false;
+  const today = dateInTimezone(now, timezone);
+  if (attemptedDate === today) return false;
   if (lastReconciledAt === null) return true;
-  return dateInTimezone(new Date(lastReconciledAt), timezone) !== dateInTimezone(now, timezone);
+  return dateInTimezone(new Date(lastReconciledAt), timezone) !== today;
 }
 
 export function createSheetMirrorRunner(deps: SheetMirrorRunnerDependencies): SheetMirrorRunner {
@@ -76,11 +92,43 @@ export function createSheetMirrorRunner(deps: SheetMirrorRunnerDependencies): Sh
   // 兩個校正（或一個校正疊一個增量）在跑，各自對 Sheets 開一輪 API 呼叫——
   // 配額瞬間翻倍，兩邊還可能同時寫同一張表。寧可晚一輪，不要疊加。
   let inFlight = false;
+  /**
+   * 「今天已經**嘗試**過校正」的標記（設定時區下的 `YYYY-MM-DD`），只給排程判斷用。
+   *
+   * 刻意**不**持久化，也刻意不去動 `lastReconciledAt` 的語意（那是 `/status`
+   * 對使用者說「上次校正完成於」的依據，只有真的掃完全表才算）。存哪裡的三個
+   * 選項都可行，選行程內狀態的理由：
+   *   - 這是純排程用的判斷，不是帳本事實。放進 `sheet_sync_state` 要多一個
+   *     migration 與一個永久欄位，放進 `settings` 表則是第二個時間戳、第二次
+   *     寫入——而「兩個時間戳各自寫、各自可能不同步」正好是本分支一再付錢
+   *     找出來的那一類缺陷。排程狀態放在排程器裡，只有一個地方能改它。
+   *   - 代價說清楚：重啟後標記是空的，於是每次行程啟動當天會多嘗試一次校正
+   *     （大帳本上約 400 次 API 呼叫，之後的 tick 就回到增量）。比起修好之前的
+   *     「每 20 秒一輪、整天不做增量」，這個代價是有界的；而且 `/status` 與
+   *     `sqlite3` 都看不到這個標記，事後要問「今天為什麼沒校正」只能翻日誌
+   *     （截斷本身有 logger.warn 可循）。
+   */
+  let reconcileAttemptedDate: string | null = null;
 
   async function syncTick(): Promise<SyncOutcome> {
     const state = await deps.syncRepository.loadSyncState(deps.ownerId);
-    const reconcileDue = shouldReconcileToday(state.lastReconciledAt, deps.now(), deps.timezone);
-    return reconcileDue ? deps.mirror.reconcile() : deps.mirror.syncOnce();
+    const reconcileDue = shouldReconcileToday(
+      state.lastReconciledAt,
+      reconcileAttemptedDate,
+      deps.now(),
+      deps.timezone,
+    );
+    if (!reconcileDue) return deps.mirror.syncOnce();
+
+    const outcome = await deps.mirror.reconcile();
+    // 只要校正真的跑完一輪（含被 RECONCILE_MAX_PAGES 截斷的那種：outcome 是
+    // `synced` 但 `scannedToEnd` 為 false），今天就算試過了，接下來的 tick 回去
+    // 跑增量。失敗（`failed`）不算試過——那條路上游標與時間戳全部照舊、告警另有
+    // 機制，維持現在「下一個 tick 用平常的規則重試」的行為。
+    if (outcome.kind !== "failed") {
+      reconcileAttemptedDate = dateInTimezone(deps.now(), deps.timezone);
+    }
+    return outcome;
   }
 
   async function syncNow(): Promise<SyncOutcome | undefined> {
