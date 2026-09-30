@@ -2,6 +2,7 @@ import { GrammyError } from "grammy";
 import type { InlineKeyboardMarkup } from "grammy/types";
 
 import { MAX_ATTEMPTS, backoffMs, type OutboxMessage } from "../domain/outbox.js";
+import { logger } from "../logger.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 import { classifyDeliveryError } from "./delivery-error.js";
 
@@ -16,9 +17,9 @@ import { classifyDeliveryError } from "./delivery-error.js";
  * 寧可重複也不要遺失；lease 的長度就是這個重複的上限，不會無限重複。
  */
 
-const LEASE_MS = 30_000;
+export const LEASE_MS = 30_000;
 const BATCH = 10;
-const DRAIN_INTERVAL_MS = 5_000;
+export const DRAIN_INTERVAL_MS = 5_000;
 
 export interface OutboxSendOptions {
   readonly reply_markup?: InlineKeyboardMarkup;
@@ -179,7 +180,14 @@ export function createOutboxRunner(deps: OutboxRunnerDependencies): OutboxRunner
   function start(): void {
     if (timer) return;
     timer = setInterval(() => {
-      void drainOnce();
+      // drainOnce() 真的會 reject：claimDueOutbox、三個 markOutbox*、onNeedsAttention
+      // 都在 try 之外。Node 24 預設 --unhandled-rejections=throw，少了這個 .catch()，
+      // 一次 SQLite I/O 錯誤就會直接殺掉整個行程，而 compose.yaml 是
+      // restart: unless-stopped——每 5 秒死一次的無盡 crash loop。記一行就好，
+      // 不 rethrow：下一輪 drain 會用平常的規則重新撈到同一列。
+      drainOnce().catch((error: unknown) => {
+        logger.error("outbox drain failed", { error });
+      });
     }, DRAIN_INTERVAL_MS);
     // 不 unref 的話，這個 timer 會讓行程永遠不結束——測試與
     // LEDGER_STARTUP_CHECK 都會因此掛住。

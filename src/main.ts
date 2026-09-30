@@ -80,7 +80,26 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
   }
 }
 
+/**
+ * 縱深防禦，不是真正的修正：漏接的 promise 拒絕在 Node 24 的預設
+ * （--unhandled-rejections=throw）下會直接殺掉行程，而 compose.yaml 的
+ * restart: unless-stopped 會把它變成無盡的 crash loop——對一個必須保持可達的 bot
+ * 來說，靜默的 crash loop 比一行被記錄下來的異常糟糕得多。create-bot.ts 的
+ * bot.catch 對 handler 路徑講的是同一個原則（「任何例外都不該讓 bot 失聯」），
+ * 這裡把同一個原則補在行程層級。
+ *
+ * 真正該接住拒絕的地方是產生它的那一段程式（例如 outbox-runner 的 drain 迴圈
+ * 自己的 .catch()）；走到這裡代表有人漏了，所以一定要留下一筆記錄，而且要走
+ * 會遮罩的 logger，不能讓 Node runtime 把未遮罩的 stack trace 直接印到 stderr。
+ */
+export function installUnhandledRejectionGuard(): void {
+  process.on("unhandledRejection", (reason: unknown) => {
+    logger.error("unhandled promise rejection", { error: reason });
+  });
+}
+
 export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  installUnhandledRejectionGuard();
   const config = loadConfig(env);
   const runtime = await composeRuntime(config);
 

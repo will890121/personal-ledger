@@ -2,6 +2,7 @@ import { GrammyError } from "grammy";
 import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type { OutboxCause, OutboxStatus } from "../../src/domain/outbox.js";
+import { logger } from "../../src/logger.js";
 import {
   createOutboxRunner,
   type OutboxApi,
@@ -322,6 +323,46 @@ describe("outbox runner", () => {
     await Promise.all([runner.drainOnce(), runner.drainOnce()]);
 
     expect(api.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it("logs a rejected background drain instead of letting it kill the process", async () => {
+    // C1：drainOnce() 真的會 reject——claimDueOutbox、三個 markOutbox*、
+    // onNeedsAttention 全都在 try 之外。少了 .catch()，Node 24 的預設
+    // （--unhandled-rejections=throw）會直接殺掉行程，compose.yaml 的
+    // restart: unless-stopped 再把它變成每 5 秒一次的 crash loop。
+    //
+    // 這裡不用 vi.useFakeTimers()：攔下 setInterval 拿到真正的 tick 回呼、手動
+    // 觸發一次，就能在不等 5 秒、也不換掉整套計時器的情況下走完 start() 的那條路徑。
+    const { runner, repository } = harness();
+    repository.claimDueOutbox = vi
+      .fn()
+      .mockRejectedValue(new Error("SQLITE_FULL: database or disk is full"));
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const unhandled: unknown[] = [];
+    const collect = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", collect);
+
+    try {
+      runner.start();
+      const tick = setIntervalSpy.mock.calls[0]?.[0];
+      if (typeof tick !== "function") throw new Error("start() did not schedule a tick");
+      tick();
+      // unhandledRejection 是在 microtask queue 排空之後才發出的，要讓出一個
+      // macrotask 才看得到它——否則這個斷言永遠不會失敗。
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledOnce();
+      expect(errorSpy.mock.calls[0]?.[0]).toBe("outbox drain failed");
+    } finally {
+      runner.stop();
+      process.removeListener("unhandledRejection", collect);
+      setIntervalSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it("start() unrefs its interval so the process can exit on its own; stop() clears it", () => {
