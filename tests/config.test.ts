@@ -57,17 +57,32 @@ describe("loadConfig 的 Sheets 鏡像設定", () => {
     ).toEqual({ keyFile: "/k.json", spreadsheetId: "s1" });
   });
 
+  // M-1（M5c）：原本用交替正規表示式 `/A|B/` 斷言，兩個方向都會過，所以
+  // 「缺哪一個變數」沒有被真的釘住——只設了金鑰路徑的使用者可能被告知
+  // 「金鑰路徑 is required」，訊息指錯了方向也不會有測試發現。這裡改成
+  // 分別斷言各自方向唯一正確的訊息。
   it.each([
-    ["GOOGLE_SERVICE_ACCOUNT_KEY_FILE", { GOOGLE_SERVICE_ACCOUNT_KEY_FILE: "/k.json" }],
-    ["SHEET_SPREADSHEET_ID", { SHEET_SPREADSHEET_ID: "s1" }],
-  ])("refuses to start when only %s is set", (_name, partial) => {
-    // Review Focus #5。半開啟狀態下鏡像靜默不運作，使用者不會發現。
-    expect(() => {
-      loadConfig({ ...baseEnv, ...partial });
-    }).toThrow(/SHEET_SPREADSHEET_ID|GOOGLE_SERVICE_ACCOUNT_KEY_FILE/);
-  });
+    [
+      "GOOGLE_SERVICE_ACCOUNT_KEY_FILE",
+      { GOOGLE_SERVICE_ACCOUNT_KEY_FILE: "/k.json" },
+      "SHEET_SPREADSHEET_ID is required when GOOGLE_SERVICE_ACCOUNT_KEY_FILE is set",
+    ],
+    [
+      "SHEET_SPREADSHEET_ID",
+      { SHEET_SPREADSHEET_ID: "s1" },
+      "GOOGLE_SERVICE_ACCOUNT_KEY_FILE is required when SHEET_SPREADSHEET_ID is set",
+    ],
+  ])(
+    "refuses to start when only %s is set, and names the missing variable (not the one that is set)",
+    (_name, partial, expectedMessage) => {
+      // Review Focus #5。半開啟狀態下鏡像靜默不運作，使用者不會發現。
+      expect(() => {
+        loadConfig({ ...baseEnv, ...partial });
+      }).toThrow(expectedMessage);
+    },
+  );
 
-  it("不把 spreadsheet id 或金鑰路徑寫進錯誤訊息", () => {
+  it("不把 spreadsheet id 寫進錯誤訊息", () => {
     // 錯誤訊息會進終端與日誌。只設一半時它一定會被印出來，所以只能提變數名稱。
     const act = (): void => {
       loadConfig({ ...baseEnv, SHEET_SPREADSHEET_ID: "secret-spreadsheet-id" });
@@ -78,6 +93,21 @@ describe("loadConfig 的 Sheets 鏡像設定", () => {
       act();
     } catch (error) {
       expect(String(error)).not.toContain("secret-spreadsheet-id");
+    }
+  });
+
+  it("不把金鑰路徑寫進錯誤訊息", () => {
+    // M-2（M5d）：原本只測了 spreadsheet id 那一半，只設金鑰路徑時的路徑洩漏
+    // 活了下來。金鑰路徑跟 spreadsheet id 一樣不該出現在終端或日誌裡。
+    const act = (): void => {
+      loadConfig({ ...baseEnv, GOOGLE_SERVICE_ACCOUNT_KEY_FILE: "/secret/service-account.json" });
+    };
+
+    expect(act).toThrow(/GOOGLE_SERVICE_ACCOUNT_KEY_FILE/);
+    try {
+      act();
+    } catch (error) {
+      expect(String(error)).not.toContain("/secret/service-account.json");
     }
   });
 });
