@@ -412,8 +412,11 @@ application 層，這個 task 測的是查詢本身）。
 > `input_events` 沒有 `chat_id`／`message_id`（真實欄位是 `telegram_update_id`、
 > `source_type`、`source_ref`）；`drafts` 的 `request_id` 與 `draft_json` 是 NOT NULL
 > 但 seed 沒給；`categories` 的 `kind` 與 `depth` 是 NOT NULL，且有 CHECK 綁定
-> `depth = 1` 時 `parent_id` 必須為 NULL；`transactions` 那句 `.run()` 傳了 12 個值
-> 對 11 個佔位符。
+> `depth = 1` 時 `parent_id` 必須為 NULL。
+>
+> （原本這裡還寫了「`transactions` 那句 `.run()` 傳了 12 個值對 11 個佔位符」——
+> **那一項是錯的**，我照實作者的回報寫上去而沒有自己數。審查員逐字元數過是 11 對 11，
+> 我複驗確認。其餘四項差異是真的。）
 > **以 `tests/db/sheet-sync-changes.test.ts` 的實際內容為準**，下面保留原文只為記錄。
 
 ```ts
