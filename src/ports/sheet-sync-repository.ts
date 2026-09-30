@@ -54,4 +54,15 @@ export interface SheetSyncRepository {
     cursor: SyncCursor | null,
     limit: number,
   ): Promise<MirrorTransaction[]>;
+
+  /**
+   * 「連續失敗需要驚動使用者」這個告警的節流時間戳（ISO 字串），存進 settings 表。
+   * 和 `src/telegram/notify-attention.ts` 的 `outbox_last_alert_at` 同一張表、
+   * 同一個語意，鍵名是 `sheet_last_alert_at`：只有通知真的送出成功才寫入
+   * （見 `sheet-mirror.ts` 的呼叫端），行程重啟也不會被重置——`consecutiveFailures`
+   * 本來就是持久的，節流時間戳若只活在記憶體裡，重啟後計數還在門檻之上，
+   * 下一次失敗就會立刻再通知一次使用者。
+   */
+  loadAlertAt(ownerId: string): Promise<string | null>;
+  saveAlertAt(ownerId: string, iso: string): Promise<void>;
 }

@@ -156,7 +156,15 @@ function laterCursor(current: SyncCursor | null, candidate: SyncCursor): SyncCur
   return candidate.transactionId > current.transactionId ? candidate : current;
 }
 
-/** 通知節流：同一個狀況十分鐘內只講一次，不要洗版使用者。 */
+/**
+ * 通知節流：同一個狀況十分鐘內只講一次，不要洗版使用者。
+ *
+ * 時間戳存在 `syncRepository.loadAlertAt` / `saveAlertAt`（底層是 settings 表），
+ * 不是這個函式內的 closure 變數——`consecutiveFailures` 是持久的，行程重啟後
+ * 計數仍在門檻之上；若節流時間戳只活在記憶體裡，重啟就等於節流窗口被清空，
+ * 下一次失敗會立刻再通知一次使用者（crash loop 的情境下就是每次重啟都通知一次，
+ * 而那正是節流存在的理由）。
+ */
 const NOTIFY_THROTTLE_MS = 10 * 60_000;
 
 export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
@@ -170,22 +178,20 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
     reconcileMaxPages,
   } = deps;
 
-  // 沿用 notify-attention.ts 裁決過的語意：只在通知「送出成功」時才蓋節流時間戳。
-  // 送失敗代表使用者根本沒收到，不該因此吃掉接下來十分鐘的靜默窗口。
-  let lastNotifiedAtMs: number | null = null;
-
   async function notifyNeedsAttention(state: SheetSyncState): Promise<void> {
     if (onNeedsAttention === undefined) return;
+    const lastAlertAt = await syncRepository.loadAlertAt(ownerId);
     const nowMs = now().getTime();
-    if (lastNotifiedAtMs !== null && nowMs - lastNotifiedAtMs < NOTIFY_THROTTLE_MS) return;
+    if (lastAlertAt !== null && nowMs - Date.parse(lastAlertAt) < NOTIFY_THROTTLE_MS) return;
     try {
       await onNeedsAttention(state);
     } catch {
       // 吞掉：通知失敗是「盡力而為」——不能讓 syncOnce 跟著拋錯，也不能因為
-      // 這次沒送到就當作節流窗口已經用掉（見上方註解）。
+      // 這次沒送到就當作節流窗口已經用掉（沿用 notify-attention.ts 裁決過的語意：
+      // 只在通知「送出成功」時才蓋節流時間戳）。
       return;
     }
-    lastNotifiedAtMs = nowMs;
+    await syncRepository.saveAlertAt(ownerId, now().toISOString());
   }
 
   async function buildWrites(changed: readonly MirrorTransaction[]): Promise<{

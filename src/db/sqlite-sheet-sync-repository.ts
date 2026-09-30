@@ -46,8 +46,33 @@ interface AllocationRow {
   note: string | null;
 }
 
+/**
+ * 節流時間戳存進 settings 表的鍵名，和 notify-attention.ts 的 outbox_last_alert_at
+ * 同一張表、不同鍵。刻意不為此開新 migration：兩條管線（outbox 告警與 Sheets 鏡像
+ * 告警）的節流狀態放在同一處，維運時問「節流狀態在哪」只有一個答案。
+ */
+const ALERT_SETTING_KEY = "sheet_last_alert_at";
+
 export class SqliteSheetSyncRepository implements SheetSyncRepository {
   public constructor(private readonly database: Database.Database) {}
+
+  public loadAlertAt(ownerId: string): Promise<string | null> {
+    const row = this.database
+      .prepare("SELECT value FROM settings WHERE owner_id = ? AND key = ?")
+      .get(ownerId, ALERT_SETTING_KEY) as { value: string } | undefined;
+    return Promise.resolve(row?.value ?? null);
+  }
+
+  public saveAlertAt(ownerId: string, iso: string): Promise<void> {
+    this.database
+      .prepare(
+        `INSERT INTO settings (owner_id, key, value, updated_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT (owner_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run(ownerId, ALERT_SETTING_KEY, iso);
+    return Promise.resolve();
+  }
 
   public loadSyncState(ownerId: string): Promise<SheetSyncState> {
     const row = this.database

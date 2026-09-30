@@ -49,17 +49,15 @@ function transaction(overrides: Partial<MirrorTransaction> = {}): MirrorTransact
   };
 }
 
-function harness(options: { onNeedsAttention?: SheetMirrorDependencies["onNeedsAttention"] }): {
-  mirror: ReturnType<typeof createSheetMirror>;
-  sheets: FakeSheetsClient;
-  advance: (ms: number) => void;
+/**
+ * 假倉儲：state 與告警節流時間戳都存在這個函式外的變數裡，模擬 settings 表——
+ * 只要 syncRepository 實例不變，「重新呼叫 createSheetMirror」就等於「行程重啟後
+ * 重新讀同一個持久儲存」，而不是「記憶體被清空」。
+ */
+function createFakeSyncRepository(): {
+  syncRepository: SheetSyncRepository;
   getState: () => SheetSyncState;
 } {
-  let currentMs = INITIAL_NOW;
-  const advance = (ms: number): void => {
-    currentMs += ms;
-  };
-
   let state: SheetSyncState = {
     ownerId: OWNER,
     cursorUpdatedAt: null,
@@ -69,6 +67,7 @@ function harness(options: { onNeedsAttention?: SheetMirrorDependencies["onNeedsA
     consecutiveFailures: 0,
     lastReconciledAt: null,
   };
+  const alertAtByOwner = new Map<string, string>();
 
   const syncRepository: SheetSyncRepository = {
     loadSyncState: () => Promise.resolve(state),
@@ -78,7 +77,36 @@ function harness(options: { onNeedsAttention?: SheetMirrorDependencies["onNeedsA
     },
     // 每一輪都回同一筆交易：測試只在意失敗計數/升級行為，不在意實際搬了多少資料。
     listChangedTransactions: () => Promise.resolve([transaction()]),
+    loadAlertAt: (ownerId) => Promise.resolve(alertAtByOwner.get(ownerId) ?? null),
+    saveAlertAt: (ownerId, iso) => {
+      alertAtByOwner.set(ownerId, iso);
+      return Promise.resolve();
+    },
   };
+
+  return { syncRepository, getState: () => state };
+}
+
+function harness(options: { onNeedsAttention?: SheetMirrorDependencies["onNeedsAttention"] }): {
+  mirror: ReturnType<typeof createSheetMirror>;
+  sheets: FakeSheetsClient;
+  advance: (ms: number) => void;
+  getState: () => SheetSyncState;
+  /**
+   * 模擬「行程重啟」：用同一個 syncRepository（同一份持久狀態）重新建構
+   * createSheetMirror。若節流時間戳是 in-memory closure，這裡會被重置；
+   * 若真的存進倉儲，重建之後仍讀得到同一個時間戳。
+   */
+  rebuildMirror: (
+    onNeedsAttention?: SheetMirrorDependencies["onNeedsAttention"],
+  ) => ReturnType<typeof createSheetMirror>;
+} {
+  let currentMs = INITIAL_NOW;
+  const advance = (ms: number): void => {
+    currentMs += ms;
+  };
+
+  const { syncRepository, getState } = createFakeSyncRepository();
 
   const summaryRepository = {
     summarize: () => Promise.resolve(ZERO_SUMMARY),
@@ -90,19 +118,22 @@ function harness(options: { onNeedsAttention?: SheetMirrorDependencies["onNeedsA
     MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
   });
 
-  const mirror = createSheetMirror({
-    ownerId: OWNER,
-    sheets,
-    syncRepository,
-    summaryRepository,
-    now: () => new Date(currentMs),
-    // exactOptionalPropertyTypes：只有真的有值才放這個鍵，避免顯式傳入 undefined。
-    ...(options.onNeedsAttention === undefined
-      ? {}
-      : { onNeedsAttention: options.onNeedsAttention }),
-  });
+  const buildMirror = (
+    onNeedsAttention?: SheetMirrorDependencies["onNeedsAttention"],
+  ): ReturnType<typeof createSheetMirror> =>
+    createSheetMirror({
+      ownerId: OWNER,
+      sheets,
+      syncRepository,
+      summaryRepository,
+      now: () => new Date(currentMs),
+      // exactOptionalPropertyTypes：只有真的有值才放這個鍵，避免顯式傳入 undefined。
+      ...(onNeedsAttention === undefined ? {} : { onNeedsAttention }),
+    });
 
-  return { mirror, sheets, advance, getState: () => state };
+  const mirror = buildMirror(options.onNeedsAttention);
+
+  return { mirror, sheets, advance, getState, rebuildMirror: buildMirror };
 }
 
 /** 讓下一輪的讀取失敗。用一個帶狀態碼的物件模擬 googleapis 的錯誤形狀。 */
@@ -279,5 +310,27 @@ describe("sheet mirror needs-attention throttle", () => {
     await mirror.syncOnce();
 
     expect(onNeedsAttention).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not renotify within the window after createSheetMirror is rebuilt (process restart)", async () => {
+    // consecutiveFailures 是持久的，行程重啟後計數仍在門檻之上。若節流時間戳只
+    // 活在 createSheetMirror 內的 closure，重啟就等於節流窗口被清空——bot 若在
+    // crash loop，使用者每次重啟都會再被通知一次，而那正是節流存在的理由。
+    const onNeedsAttention = vi.fn().mockResolvedValue(undefined);
+    const { mirror, sheets, advance, rebuildMirror } = harness({ onNeedsAttention });
+
+    for (let i = 0; i < 5; i += 1) {
+      nextCallFailsWith(sheets, 500);
+      await mirror.syncOnce();
+    }
+    expect(onNeedsAttention).toHaveBeenCalledOnce();
+
+    // 模擬重啟：重新建構 createSheetMirror，只過一分鐘（還在節流窗口內）。
+    const restarted = rebuildMirror(onNeedsAttention);
+    advance(60_000);
+    nextCallFailsWith(sheets, 500);
+    await restarted.syncOnce();
+
+    expect(onNeedsAttention).toHaveBeenCalledOnce();
   });
 });

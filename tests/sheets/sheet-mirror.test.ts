@@ -74,6 +74,9 @@ function harness(options: {
       return Promise.resolve();
     },
     listChangedTransactions: () => Promise.resolve(options.changed),
+    // 這個檔案的測試不碰告警節流，給最簡單的實作就好。
+    loadAlertAt: () => Promise.resolve(null),
+    saveAlertAt: () => Promise.resolve(),
   };
   const summarize = vi.fn(() => Promise.resolve(ZERO_SUMMARY));
   const summaryRepository = { summarize } as unknown as SummaryRepository;
