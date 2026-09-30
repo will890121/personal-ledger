@@ -95,6 +95,26 @@ describe("/status", () => {
     await expect(attemptsOf(repository, "stuck")).resolves.toBe(0);
   });
 
+  it("answers the callback query before it starts draining", async () => {
+    // m1：drain 最多是 10 次循序的 Telegram 呼叫，而「重試全部」存在的唯一理由就是
+    // Telegram 半通不通。先 drain 再回答，很容易超過 callback 約 15 秒的回答窗口：
+    // 按鈕一直轉圈，最後 grammY 拋 query is too old、使用者看到「操作失敗」，
+    // 但重試其實已經做了。本分支另外四個會觸發 outbox 的 handler 都是先回答再 drain。
+    const { bot, calls, repository } = harness();
+    await seedStuck(repository);
+
+    await bot.handleUpdate(callbackUpdate({ updateId: 1, data: "outbox-retry" }));
+
+    const methods = calls.map((call) => call.method);
+    const answeredAt = methods.indexOf("answerCallbackQuery");
+    const firstDeliveryAt = methods.findIndex(
+      (method) => method === "sendMessage" || method === "editMessageText",
+    );
+    expect(answeredAt).toBeGreaterThanOrEqual(0);
+    expect(firstDeliveryAt).toBeGreaterThanOrEqual(0);
+    expect(answeredAt).toBeLessThan(firstDeliveryAt);
+  });
+
   it("prints the attempt count verbatim and nothing else on the error line", async () => {
     // 這兩條是本 task 著墨最多的語意，卻也最容易被一個字元改掉：attempts 印成 attempts+1，
     // 或在錯誤行後面接上訊息內容。審查時實測，兩種改法整套 446 條測試都不會紅。
