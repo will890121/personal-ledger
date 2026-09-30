@@ -552,9 +552,15 @@ describe("真實 Google Sheets 來回", () => {
     expect(keys).toContain(HAND_TYPED);
   });
 
-  it("同一串操作，替身與真實 adapter 讀回來的內容逐格相同", async () => {
+  it("同一串操作，替身與真實 adapter 每一步讀回來的內容都逐格相同，不只終點", async () => {
     // 差分測試（spec §9）。替身一旦與真實行為漂移，所有用替身寫的單元測試就同時
     // 失去意義——而且不會有任何一條變紅。這一條是唯一會變紅的那條。
+    //
+    // 逐步比對（onStep），不是只在最後比一次：`reconcile()` 會依投影把整列重寫，
+    // 所以任何「中途出現、被校正洗掉」的漂移，只比終點永遠看不到——真實側留下
+    // 一列過時的摘要而替身側已經清掉，`moved` 那一步兩邊不同，但校正一到，兩邊
+    // 都被重寫成同一份投影，只比終點的話測試照樣綠。在每一步結束後都比一次，
+    // 才會在漂移出現的那一刻變紅，而不是被下一步洗白。
     //
     // 兩邊各有自己的 SQLite（同步狀態表是共用的，同一個帳本跑第二次只會是 idle），
     // 種的資料、id 與時鐘完全相同，跑的是同一個 runScenario。
@@ -570,10 +576,11 @@ describe("真實 Google Sheets 來回", () => {
         sheets: withHeaderRows(fake),
         raw: fake,
         ledger: fakeLedger,
+        onStep: async (step) => {
+          const fakeWorkbook = await readWorkbook(fake);
+          expect(normalized(fakeWorkbook)).toEqual(normalized(at(step)));
+        },
       });
-
-      const fakeWorkbook = await readWorkbook(fake);
-      expect(normalized(fakeWorkbook)).toEqual(normalized(at("reconciled")));
     } finally {
       fakeLedger.database.close();
     }
@@ -649,6 +656,15 @@ describe("替身與真實 adapter 的四個已知語意落差", () => {
     // 替身則直接拒絕：它是「整列取代」的模型，靜默套用會讓「引擎寫錯欄數」這種
     // 錯誤在測試裡完全沒有訊號。這個嚴格度是刻意的，不是漂移——而它之所以安全，
     // 正是因為上面那一半證明了真實 API 在同樣的寫入下行為不同。
+    //
+    // 注意這裡跟真實那一半不對稱：真實側的基準列寫在 rowIndex 2（跟後面的窄寫入
+    // 同一列），替身側卻先寫 rowIndex 1、窄寫入才碰 rowIndex 2。這不是抄錯，是替身
+    // 自己的模型逼出來的：FakeSheetsClient 把 rowIndex 1 當成標題列來算寬度守衛
+    // （見 fake-sheets-client.ts），要讓下面的窄寫入真的撞到那道守衛，就必須先有
+    // 一列立在 rowIndex 1 上把寬度定下來。如果為了對稱把基準列也搬到 rowIndex 2，
+    // rowIndex 1 就沒有任何內容，寬度守衛看到的 header 會是 `undefined`、整條規則
+    // 直接跳過，下面「拒絕窄寫入」的斷言就再也不會拋錯——測試會變紅，而紅的原因
+    // 看起來跟那次「順手對稱化」完全無關。
     const fake = freshFake();
     await fake.updateCells([{ tab: TRANSACTIONS_TAB, rowIndex: 1, cells: filledRow("a") }]);
     await expect(
