@@ -1,5 +1,11 @@
 import { affectedMonths, monthRange, monthlySummaryRow } from "../domain/sheet-months.js";
-import { allocationRows, transactionRow } from "../domain/sheet-rows.js";
+import type { SheetCell } from "../domain/sheet-rows.js";
+import {
+  ALLOCATIONS_HEADER,
+  TRANSACTIONS_HEADER,
+  allocationRows,
+  transactionRow,
+} from "../domain/sheet-rows.js";
 import { fromSheetSerialDate } from "../domain/sheet-serial-date.js";
 import type {
   MirrorTransaction,
@@ -16,6 +22,20 @@ export const MONTHLY_SUMMARY_TAB = "MonthlySummary";
 
 /** 一輪同步最多處理幾筆交易。超過的留給下一輪，游標保證不會倒退。 */
 export const SYNC_BATCH = 200;
+
+/**
+ * 一次校正最多分幾頁（保險絲，不是設計上的上限）。
+ *
+ * 校正在同一次呼叫內自己分頁直到撈完為止，正常情況下由「這一批不滿 SYNC_BATCH」
+ * 結束。這個上限只防一種情形：倉儲若因為資料異常而一直回傳滿滿的一批、游標卻不
+ * 前進，迴圈會永遠轉下去、把配額燒光。被上限截斷時我們刻意不清殭屍列——見
+ * `clearGhostRows` 的說明。
+ */
+export const RECONCILE_MAX_PAGES = 100;
+
+/** 整列清空用的空白格。清空而不是刪除列：刪除會讓列號位移，清空是冪等的。 */
+const blankRow = (width: number): SheetCell[] =>
+  Array.from({ length: width }, (): SheetCell => ({ kind: "empty" }));
 
 export interface SheetMirrorDependencies {
   readonly ownerId: string;
@@ -111,12 +131,17 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
 
   async function buildWrites(changed: readonly MirrorTransaction[]): Promise<{
     writes: CellWrite[];
-    months: number;
+    months: string[];
   }> {
     // 三張分頁的鍵欄都是這一輪現讀的。Transactions 順便讀日期欄（B），因為跨月搬移
     // 只能靠 Sheet 上的舊日期才知道舊月份，而這一欄是同一次呼叫裡免費拿到的。
     const transactionKeys = await sheets.readColumns(TRANSACTIONS_TAB, 2);
-    const allocationKeys = await sheets.readColumns(ALLOCATIONS_TAB, 1);
+    // Allocations 讀 A:B（allocation_id 與 transaction_id）。只讀 A 欄的話，就無法
+    // 知道 Sheet 上哪些列掛在正在處理的這筆交易底下——而 updateTransaction 是
+    // 「DELETE 全部配置再 INSERT」，改過一次之後舊的 allocation_id 就永遠消失了。
+    // 只 upsert 不清理的話那些列會永遠留在 Sheet 上，使用者拿 Allocations 分頁做
+    // 樞紐分析時會把已經不存在的金額算進去：一張靜默地算錯錢的試算表。
+    const allocationKeys = await sheets.readColumns(ALLOCATIONS_TAB, 2);
     const monthKeys = await sheets.readColumns(MONTHLY_SUMMARY_TAB, 1);
 
     const transactionLocator = locatorOf(transactionKeys);
@@ -125,6 +150,9 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
     const previousDates = previousDatesOf(transactionKeys);
 
     const writes: CellWrite[] = [];
+    // 這一輪已經被寫入佔用的配置列。清空只能清沒被佔用的列：同一批裡兩筆寫到
+    // 同一列是「引擎算錯列號」的訊號，客戶端會直接拋錯（模擬器也一樣）。
+    const claimedAllocationRows = new Set<number>();
     for (const txn of changed) {
       writes.push({
         tab: TRANSACTIONS_TAB,
@@ -135,11 +163,24 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
       txn.allocations.forEach((allocation, index) => {
         const cells = rows[index];
         if (cells === undefined) return;
-        writes.push({
-          tab: ALLOCATIONS_TAB,
-          rowIndex: locate(allocationLocator, allocation.allocationId),
-          cells,
-        });
+        const rowIndex = locate(allocationLocator, allocation.allocationId);
+        claimedAllocationRows.add(rowIndex);
+        writes.push({ tab: ALLOCATIONS_TAB, rowIndex, cells });
+      });
+    }
+
+    // 掛在這一批交易底下、但這一輪不會被覆寫的配置列，整列清空。兩種來源：
+    // 配置已經不存在（改交易時 allocation_id 換掉了），或同一個 allocation_id 的
+    // 重複列（定位表只指向最後一列，較早那些會變成永遠不再被覆寫的殭屍列）。
+    const changedIds = new Set(changed.map((txn) => txn.transactionId));
+    for (let i = 1; i < allocationKeys.length; i += 1) {
+      const rowIndex = i + 1;
+      if (!changedIds.has(allocationKeys[i]?.[1] ?? "")) continue;
+      if (claimedAllocationRows.has(rowIndex)) continue;
+      writes.push({
+        tab: ALLOCATIONS_TAB,
+        rowIndex,
+        cells: blankRow(ALLOCATIONS_HEADER.length),
       });
     }
 
@@ -154,32 +195,114 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
       });
     }
 
-    return { writes, months: months.length };
+    return { writes, months };
+  }
+
+  /**
+   * 校正的收尾：清掉 Sheet 上已經沒有來源的列。
+   *
+   * 只有校正能做這件事，而且只有在全表真的掃完之後才能做：`knownIds` 是「SQLite
+   * 裡存在的所有交易」，判斷「不存在」必須拿完整的集合來比。增量同步只看得到一批
+   * 變更，拿那一批去比會把整張 Sheet 清光；校正被迭代上限截斷時同理，所以那種情形
+   * 直接跳過清理——少清一輪只是晚一天修好，清錯則是資料消失。
+   */
+  async function clearGhostRows(knownIds: ReadonlySet<string>): Promise<void> {
+    const transactionKeys = await sheets.readColumns(TRANSACTIONS_TAB, 1);
+    const allocationKeys = await sheets.readColumns(ALLOCATIONS_TAB, 2);
+    const writes: CellWrite[] = [];
+
+    // 同一個 id 出現多次時，定位表指向最後一列（引擎是後寫獲勝），較早那幾列
+    // 就再也不會被覆寫。留最後一列、清掉其餘的。
+    const lastRowOf = new Map<string, number>();
+    for (let i = 1; i < transactionKeys.length; i += 1) {
+      const key = transactionKeys[i]?.[0] ?? "";
+      if (key !== "") lastRowOf.set(key, i + 1);
+    }
+    for (let i = 1; i < transactionKeys.length; i += 1) {
+      const key = transactionKeys[i]?.[0] ?? "";
+      // 空白列本來就是清空的結果，再寫一次只是浪費配額。
+      if (key === "") continue;
+      const rowIndex = i + 1;
+      if (knownIds.has(key) && lastRowOf.get(key) === rowIndex) continue;
+      writes.push({
+        tab: TRANSACTIONS_TAB,
+        rowIndex,
+        cells: blankRow(TRANSACTIONS_HEADER.length),
+      });
+    }
+
+    // 配置列的孤兒：transaction_id 已經不在 SQLite 裡（那一格是空的也算）。
+    // 掛在現有交易底下、但配置已經不存在的列由 buildWrites 負責——校正會處理到
+    // 每一筆交易，所以兩者合起來覆蓋了全部情形。
+    for (let i = 1; i < allocationKeys.length; i += 1) {
+      const row = allocationKeys[i] ?? [];
+      if ((row[0] ?? "") === "" && (row[1] ?? "") === "") continue;
+      if (knownIds.has(row[1] ?? "")) continue;
+      writes.push({
+        tab: ALLOCATIONS_TAB,
+        rowIndex: i + 1,
+        cells: blankRow(ALLOCATIONS_HEADER.length),
+      });
+    }
+
+    // 沒有殭屍列就不要多發一次寫入。校正每天都跑，配額是有限的（spec §7）。
+    if (writes.length > 0) await sheets.updateCells(writes);
   }
 
   async function run(mode: "incremental" | "reconcile"): Promise<SyncOutcome> {
     const state = await syncRepository.loadSyncState(ownerId);
-    const current = cursorOf(state);
-    // 校正走全表（cursor 傳 null），增量從游標繼續。
-    const changed = await syncRepository.listChangedTransactions(
-      ownerId,
-      mode === "reconcile" ? null : current,
-      SYNC_BATCH,
-    );
-    // 沒有變更就一個 Sheets 呼叫都不發。20 秒一輪、每分鐘只有 60 次額度，
-    // 空轉也照打會把配額燒在什麼都沒做上（spec §7）。
-    if (changed.length === 0) return { kind: "idle" };
+    const persisted = cursorOf(state);
+
+    // 增量從持久游標繼續、一輪只做一批（超過的留給下一輪）；校正走全表，而且是在
+    // 同一次呼叫內用自己的**區域**游標往前分頁。
+    //
+    // 為什麼校正不能「一次一批、靠持久游標下一輪繼續」：全表掃描的第一批永遠是最舊
+    // 的那 SYNC_BATCH 筆，而 laterCursor 會把這一批的推進丟掉（持久游標已經在前面）。
+    // 結果是每次校正都只重驗最舊的那幾筆，永遠到不了其餘資料——被手動改壞的第 500
+    // 列永遠不會被修正，而自我修復是這整個設計的賣點（spec §2、§9）。
+    let cursor = mode === "reconcile" ? null : persisted;
+    const maxPages = mode === "reconcile" ? RECONCILE_MAX_PAGES : 1;
+
+    const months = new Set<string>();
+    // 校正撈到的所有交易 id。走完全表才代表它是完整的，才能拿來判斷殭屍列。
+    const knownIds = new Set<string>();
+    let transactions = 0;
+    let advanced: SyncCursor | null = null;
+    let scannedToEnd = false;
 
     try {
-      const { writes, months } = await buildWrites(changed);
-      // 一次全有全無的寫入。失敗就整輪不推進，下一輪重做同一批——重寫一列永遠安全。
-      await sheets.updateCells(writes);
+      for (let page = 0; page < maxPages; page += 1) {
+        const changed = await syncRepository.listChangedTransactions(ownerId, cursor, SYNC_BATCH);
+        // 沒有變更就一個 Sheets 呼叫都不發。20 秒一輪、每分鐘只有 60 次額度，
+        // 空轉也照打會把配額燒在什麼都沒做上（spec §7）。
+        if (changed.length === 0) {
+          scannedToEnd = true;
+          break;
+        }
 
-      const last = changed[changed.length - 1] as MirrorTransaction;
-      const nextCursor = laterCursor(current, {
-        updatedAt: last.updatedAt,
-        transactionId: last.transactionId,
-      });
+        const built = await buildWrites(changed);
+        // 一次全有全無的寫入。失敗就整輪不推進，下一輪重做同一批——重寫一列永遠安全。
+        await sheets.updateCells(built.writes);
+        for (const month of built.months) months.add(month);
+        for (const txn of changed) knownIds.add(txn.transactionId);
+        transactions += changed.length;
+
+        const last = changed[changed.length - 1] as MirrorTransaction;
+        advanced = { updatedAt: last.updatedAt, transactionId: last.transactionId };
+        cursor = advanced;
+        // 這一批不滿就是撈完了；滿的話還有後續，同一次呼叫內繼續往前翻。
+        if (changed.length < SYNC_BATCH) {
+          scannedToEnd = true;
+          break;
+        }
+      }
+
+      if (advanced === null) return { kind: "idle" };
+
+      if (mode === "reconcile" && scannedToEnd) await clearGhostRows(knownIds);
+
+      // 游標只前進不後退：校正這一輪的最後一筆可能比持久游標還舊。
+      const nextCursor = laterCursor(persisted, advanced);
       const nowIso = now().toISOString();
       // 只有寫入成功才存狀態。失敗仍存＝那批變更被永久跳過，而且沒有任何東西會發現。
       await syncRepository.saveSyncState({
@@ -191,7 +314,7 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
         consecutiveFailures: 0,
         lastReconciledAt: mode === "reconcile" ? nowIso : state.lastReconciledAt,
       });
-      return { kind: "synced", transactions: changed.length, months };
+      return { kind: "synced", transactions, months: months.size };
     } catch (error) {
       // 失敗計數與退避由 Task 8 的包裝負責，這裡只負責「不推進」。
       return { kind: "failed", error };
