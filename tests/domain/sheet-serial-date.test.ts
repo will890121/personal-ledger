@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toSheetSerialDate } from "../../src/domain/sheet-serial-date.js";
+import { fromSheetSerialDate, toSheetSerialDate } from "../../src/domain/sheet-serial-date.js";
 
 describe("toSheetSerialDate", () => {
   it("maps the sheets epoch to zero", () => {
@@ -23,6 +23,17 @@ describe("toSheetSerialDate", () => {
       expect(toSheetSerialDate("2026-10-01")).toBe(46296);
     } finally {
       process.env.TZ = previous;
+    }
+  });
+});
+
+describe("fromSheetSerialDate", () => {
+  it("round-trips every date it is given, including a leap day", () => {
+    // 這是那個 1899-12-30 原點常數唯一的守門人：兩個方向共用它，只要它被改動，
+    // 來回一趟就對不回原本的日期。閏日單獨列出來，因為 2/29 是最容易被自製
+    // 天數換算算錯的一天。
+    for (const date of ["1899-12-30", "2024-02-29", "2026-10-01", "2026-09-28", "2100-03-01"]) {
+      expect(fromSheetSerialDate(toSheetSerialDate(date))).toBe(date);
     }
   });
 });

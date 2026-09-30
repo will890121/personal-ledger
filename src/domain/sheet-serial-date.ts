@@ -16,3 +16,18 @@ export function toSheetSerialDate(isoDate: string): number {
   const utcMs = Date.UTC(Number(year), Number(month) - 1, Number(day));
   return Math.round((utcMs - SHEETS_EPOCH_UTC_MS) / MS_PER_DAY);
 }
+
+/**
+ * 序列值轉回 `YYYY-MM-DD`，是 `toSheetSerialDate` 的反向。
+ *
+ * 需要它是因為 Sheet 上的日期欄存的是序列值，而判斷「這筆交易有沒有跨月搬移」
+ * 只能靠讀回那個舊值。兩個方向共用同一個原點常數，所以刻意放在同一個模組裡——
+ * 分開就等於把那個魔術數字抄兩份。
+ */
+export function fromSheetSerialDate(serial: number): string {
+  const date = new Date(SHEETS_EPOCH_UTC_MS + Math.round(serial) * MS_PER_DAY);
+  const year = String(date.getUTCFullYear()).padStart(4, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
