@@ -160,7 +160,11 @@ describe("sheet mirror", () => {
     const outcome = await mirror.syncOnce();
 
     expect(outcome.kind).toBe("failed");
-    expect(saved).toHaveLength(0);
+    // 失敗仍會存一次狀態（記失敗次數／分類用，見 sheet-mirror-failure.test.ts），
+    // 但游標本身必須原封不動——這才是這個測試真正要釘住的事。
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.cursorUpdatedAt).toBeNull();
+    expect(saved[0]?.cursorTransactionId).toBeNull();
   });
 
   it("does not advance the cursor when the read fails", async () => {
@@ -171,7 +175,9 @@ describe("sheet mirror", () => {
     const outcome = await mirror.syncOnce();
 
     expect(outcome.kind).toBe("failed");
-    expect(saved).toHaveLength(0);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.cursorUpdatedAt).toBeNull();
+    expect(saved[0]?.cursorTransactionId).toBeNull();
   });
 
   it("recomputes both months when a transaction moves across a month boundary", async () => {

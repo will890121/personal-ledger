@@ -15,6 +15,7 @@ import type {
 } from "../ports/sheet-sync-repository.js";
 import type { CellWrite, SheetsClient } from "../ports/sheets-client.js";
 import type { SummaryRepository } from "../ports/summary-repository.js";
+import { describeSheetFailure, ESCALATE_AFTER_FAILURES } from "./sheet-failure.js";
 
 export const TRANSACTIONS_TAB = "Transactions";
 export const ALLOCATIONS_TAB = "Allocations";
@@ -56,6 +57,14 @@ export interface SheetMirrorDependencies {
   readonly syncRepository: SheetSyncRepository;
   readonly summaryRepository: SummaryRepository;
   readonly now: () => Date;
+  /**
+   * 連續失敗達到 `ESCALATE_AFTER_FAILURES` 時呼叫，把「鏡像已經停住」這件事
+   * 交給呼叫端去通知使用者（Task 10／11／12 接到 Telegram）。
+   *
+   * 這裡刻意不 import grammY：注入點只知道「需要有人注意」，接到哪一種
+   * 通知管道是呼叫端的事。省略時視同不通知（例如尚未接上真正的通知管道）。
+   */
+  readonly onNeedsAttention?: (state: SheetSyncState) => Promise<void> | void;
 }
 
 export type SyncOutcome =
@@ -139,8 +148,29 @@ function laterCursor(current: SyncCursor | null, candidate: SyncCursor): SyncCur
   return candidate.transactionId > current.transactionId ? candidate : current;
 }
 
+/** 通知節流：同一個狀況十分鐘內只講一次，不要洗版使用者。 */
+const NOTIFY_THROTTLE_MS = 10 * 60_000;
+
 export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
-  const { ownerId, sheets, syncRepository, summaryRepository, now } = deps;
+  const { ownerId, sheets, syncRepository, summaryRepository, now, onNeedsAttention } = deps;
+
+  // 沿用 notify-attention.ts 裁決過的語意：只在通知「送出成功」時才蓋節流時間戳。
+  // 送失敗代表使用者根本沒收到，不該因此吃掉接下來十分鐘的靜默窗口。
+  let lastNotifiedAtMs: number | null = null;
+
+  async function notifyNeedsAttention(state: SheetSyncState): Promise<void> {
+    if (onNeedsAttention === undefined) return;
+    const nowMs = now().getTime();
+    if (lastNotifiedAtMs !== null && nowMs - lastNotifiedAtMs < NOTIFY_THROTTLE_MS) return;
+    try {
+      await onNeedsAttention(state);
+    } catch {
+      // 吞掉：通知失敗是「盡力而為」——不能讓 syncOnce 跟著拋錯，也不能因為
+      // 這次沒送到就當作節流窗口已經用掉（見上方註解）。
+      return;
+    }
+    lastNotifiedAtMs = nowMs;
+  }
 
   async function buildWrites(changed: readonly MirrorTransaction[]): Promise<{
     writes: CellWrite[];
@@ -359,7 +389,19 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
       });
       return { kind: "synced", transactions, months: months.size };
     } catch (error) {
-      // 失敗計數與退避由 Task 8 的包裝負責，這裡只負責「不推進」。
+      // 失敗：游標與時間戳全部照抄舊狀態，只加計數、換 lastError。cursor 不動
+      // 是設計核心——失敗仍推進游標，那批變更就被永久跳過而沒人發現。
+      const failedState: SheetSyncState = {
+        ...state,
+        lastError: describeSheetFailure(error),
+        consecutiveFailures: state.consecutiveFailures + 1,
+      };
+      await syncRepository.saveSyncState(failedState);
+      // 達到門檻才升級：偶發的暫時性錯誤（下一輪 tick 就會自己好）不值得驚動人，
+      // 連續失敗到一定次數才代表這不是暫時性的。
+      if (failedState.consecutiveFailures >= ESCALATE_AFTER_FAILURES) {
+        await notifyNeedsAttention(failedState);
+      }
       return { kind: "failed", error };
     }
   }
