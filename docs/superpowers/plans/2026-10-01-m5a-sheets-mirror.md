@@ -1768,6 +1768,19 @@ describe("convergence", () => {
     // 模擬那筆 M1 沒有稽核事件、且游標已經越過它的交易：
     // 游標設在它之後，跑 syncOnce() 不會處理它，跑 reconcile() 會。
   });
+
+  it("clears an allocation row whose allocation no longer exists", async () => {
+    // 2026-10-01 補（Task 6 實作者發現的缺口）。updateTransaction 是
+    // 「DELETE 全部配置再 INSERT」，所以改一筆交易之後舊的 allocation_id 就永遠消失了。
+    // 若鏡像只 upsert 不清理，Sheet 上會永遠留著那些已經不存在的配置列 ——
+    // 使用者用 Allocations 分頁做樞紐分析時會把它們算進去，金額直接錯。
+    // 這不是裝飾性的問題，是「Sheet 是 SQLite 的投影」這個不變量的破口。
+    //
+    // 做法：Allocations 分頁讀 A:B（allocation_id 與 transaction_id 兩欄），
+    // 對每一筆處理中的交易，找出 Sheet 上掛在它底下、但已經不在它現有配置裡的列，
+    // 把整列清空。清空而不是刪除列：刪除會讓列號位移，而清空是冪等的，
+    // 且定位一律靠 id、不靠位置。空白列會累積，這是已知且接受的代價。
+  });
 });
 ```
 
@@ -1777,6 +1790,13 @@ describe("convergence", () => {
 `lastReconciledAt = now`。**不要複製一份流程** —— 複製出來的第二條路徑會自己長出 bug
 而且沒人會發現（spec §3）。用同一個內部函式，差別只在 cursor 與要不要寫
 `lastReconciledAt`。
+
+> **2026-10-01 更正（Task 6 實作時發現的計畫缺陷）：照字面做會讓游標倒退。**
+> 全表掃描的第一批是最舊的交易，若直接把游標存成那一批的最後一筆，游標就從「今天」
+> 倒退回幾個月前，之後的增量同步要重走一遍所有東西 —— 不會遺失資料（寫入是冪等的），
+> 但每天的校正等於把整個同步重啟一次。
+> **游標只能前進**：存檔前與現有游標比較，取較晚的那一個。Task 6 已實作 `laterCursor()`，
+> 在增量路徑上是 no-op。
 
 `reconcile` 的批次上限與 `syncOnce` 相同（`SYNC_BATCH`）。資料量超過一批時，
 一次 `reconcile` 只處理一批，游標推進，下一輪繼續 —— 校正是漸進的，不需要一次掃完。
