@@ -134,9 +134,9 @@ describe("logger", () => {
     });
   });
 
-  // Finding 1：拒絕清單裡的六個欄位名各自獨立測試——用同一個 Set.has() 實作
+  // Finding 1：拒絕清單裡的每一個欄位名各自獨立測試——用同一個 Set.has() 實作
   // 不代表每個名字都真的被蓋到；拿掉清單裡任何一個名字，都要有一個測試因此
-  // 失敗，而不是只有 rawText 被測到、其他五個名字形同虛設。
+  // 失敗，而不是只有 rawText 被測到、其他名字形同虛設。
   const DENYLISTED_FIELD_NAMES = [
     "rawText",
     "rawInputSnapshot",
@@ -144,6 +144,11 @@ describe("logger", () => {
     "note",
     "token",
     "telegramBotToken",
+    // Sheets 鏡像的四個：試算表 id 與服務帳號金鑰的兩個欄位名。
+    "spreadsheetId",
+    "serviceAccountKey",
+    "privateKey",
+    "client_email",
   ] as const;
 
   it.each(DENYLISTED_FIELD_NAMES)("drops the %s field entirely, on its own", (field) => {

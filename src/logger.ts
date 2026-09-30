@@ -17,6 +17,13 @@ const DENYLISTED_FIELDS: ReadonlySet<string> = new Set([
   "note",
   "token",
   "telegramBotToken",
+  // Sheets 鏡像帶進來的四個：試算表 id 本身就是通往整份財務資料的位址（知道 id
+  // 再加上一份洩漏的金鑰就等於整本帳），服務帳號金鑰檔的內容（privateKey、
+  // client_email）是憑證本體，而 googleapis 的錯誤物件很容易被整包塞進日誌欄位。
+  "spreadsheetId",
+  "serviceAccountKey",
+  "privateKey",
+  "client_email",
 ]);
 
 // Telegram bot token 的樣式：一串數字、冒號、後面接一長串 base64url 字元
