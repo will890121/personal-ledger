@@ -2150,6 +2150,20 @@ git commit -m "feat: /status 顯示 Sheets 鏡像狀態"
 - Delete: `docs/todo/outbox-delivery-logging.md`
 - Test: `tests/sheets/sheet-mirror-logging.test.ts`、`tests/telegram/outbox-logging.test.ts`
 
+**這個 task 的第一件事：把 grammY 從 `src/logger.ts` 拿掉。**
+
+`src/logger.ts:3` 目前 `import { GrammyError } from "grammy"`，第 61 行用 `instanceof` 判斷。
+因此 `src/sheets/` 不能使用 logger 而不違反「sheets 不依賴 grammY」的邊界 ——
+Task 8 的實作者只好讓 best-effort 的 catch 靜默吞掉，Task 9 只好改成注入 `logError`。
+兩個 task 都被同一個耦合繞了路。
+
+改成**鴨子型別**判斷（檢查 `error_code` 與 `description` 兩個屬性）而不是 `instanceof`。
+logger 是全專案的單一日誌出口，它本來就不該知道 grammY 的存在。
+M4 的整分支審查也曾因為同一個耦合，讓「0 列」的記錄被推到 telegram 層。這次從根上解掉。
+
+既有的兩條 logger 測試（保留 GrammyError 的 code 與 description、把 SQLite 錯誤縮成類別名）
+必須維持綠燈 —— 它們是這個改動唯一的安全網。
+
 M4 驗收發現：刻意製造的整場遞送事故在 `docker logs` 裡沒有留下任何一行。
 `/status` 顯示當下狀態，事故結束就不留痕跡，事後答不出「發生過幾次」。
 兩條管線要用**同一套記錄慣例**。
@@ -2164,6 +2178,15 @@ M4 驗收發現：刻意製造的整場遞送事故在 `docker logs` 裡沒有�
 | outbox 送出失敗、排定退避重試 | `info` |
 | outbox 用盡上限轉 needs_attention | `warn` |
 | `notify-attention` 自己送不出去 | `warn`（目前全專案最安靜的失敗路徑） |
+| **校正被頁數上限截斷**（`SyncOutcome.scannedToEnd === false`） | `warn` |
+
+最後那一條是 2026-10-01 追加的。Task 11 把 `scannedToEnd` 加進了 `SyncOutcome`，
+但**目前只有測試在讀它** —— runner 與 main 都沒有對它做任何事。
+截斷代表「今天的校正沒跑完、還有資料沒被驗證」，那是需要留下痕跡的事件：
+`lastReconciledAt` 不前進是唯一的被動訊號，而主動的一行日誌能讓人在事後看得出發生過。
+
+**同時要先拆掉 logger 對 grammY 的依賴**（見本 task 的第一件事），
+否則 `src/sheets/` 根本無法記錄這一行。
 
 **可以記**：內部識別碼、錯誤類別與狀態碼、筆數、耗時。
 **不可以記**：訊息本文、財務原文、帳戶／商家／對象名稱、金額。
