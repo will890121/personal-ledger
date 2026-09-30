@@ -4,6 +4,24 @@ const DEFAULT_DATABASE_PATH = "./data/personal-ledger.sqlite";
 const DEFAULT_TIMEZONE = "Asia/Taipei";
 const DEFAULT_CURRENCY = "TWD";
 
+/**
+ * 「有這個鍵、但值是空字串」一律當成沒設定。
+ *
+ * 把功能關掉最自然的手勢就是把那一行的值清空，而 compose 與
+ * `docker run --env-file` 都會把 `FOO=` 照實傳進容器（兩者都實測過），
+ * 於是變數在程式看來是「有設定、值不合法」。少了這個轉換，清空一行會讓 bot
+ * 直接拒絕啟動 —— 而且「只設一半就拒絕啟動」那道守衛會對一個根本不是半設定的
+ * 狀態開火，錯誤訊息還會指向另一個變數。開機失敗很吵，但吵錯方向比不吵更糟。
+ *
+ * 只吃掉「整個值是空白」這一種情形。真的填了值就照原樣驗證，所以半設定
+ * （一個填了、一個空著或沒有）仍然會拒絕啟動。
+ */
+const optionalTrimmed = z
+  .string()
+  .trim()
+  .transform((value) => (value === "" ? undefined : value))
+  .optional();
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().trim().min(1, "TELEGRAM_BOT_TOKEN is required"),
   LEDGER_OWNER_ID: z.string().regex(/^\d+$/, "LEDGER_OWNER_ID must be numeric"),
@@ -11,8 +29,9 @@ const envSchema = z.object({
   TZ: z.string().trim().min(1).default(DEFAULT_TIMEZONE),
   LEDGER_CURRENCY: z.literal(DEFAULT_CURRENCY).default(DEFAULT_CURRENCY),
   // 兩個都選填：都沒設代表「這台機器還沒有 Sheets 憑證」，鏡像整個關閉、bot 照常運作。
-  GOOGLE_SERVICE_ACCOUNT_KEY_FILE: z.string().trim().min(1).optional(),
-  SHEET_SPREADSHEET_ID: z.string().trim().min(1).optional(),
+  // 空字串等同沒設（見 optionalTrimmed）：把值清空是關掉功能最自然的手勢。
+  GOOGLE_SERVICE_ACCOUNT_KEY_FILE: optionalTrimmed,
+  SHEET_SPREADSHEET_ID: optionalTrimmed,
 });
 
 /** Sheets 鏡像的設定。`null` 代表鏡像整個關閉。 */

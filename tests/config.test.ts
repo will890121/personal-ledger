@@ -57,6 +57,53 @@ describe("loadConfig 的 Sheets 鏡像設定", () => {
     ).toEqual({ keyFile: "/k.json", spreadsheetId: "s1" });
   });
 
+  // 「把值清空」是關掉功能最自然的手勢，而 compose 與 docker run --env-file 都會把
+  // `FOO=` 照實傳進容器（兩者都實測過）。少了 src/config.ts 的空字串轉換，
+  // 清空一行會讓 bot 直接拒絕啟動，而且「只設一半」那道守衛會對一個根本不是半設定的
+  // 狀態開火、訊息還指向另一個變數。三種組合各釘一條。
+  it.each([
+    ["空字串", ""],
+    ["只有空白", "   "],
+  ])("兩個都是%s時鏡像關閉，bot 照常啟動", (_name, blank) => {
+    const config = loadConfig({
+      ...baseEnv,
+      GOOGLE_SERVICE_ACCOUNT_KEY_FILE: blank,
+      SHEET_SPREADSHEET_ID: blank,
+    });
+
+    expect(config.sheets).toBeNull();
+    // 其餘設定要完好無損：這條路徑是「鏡像關閉」，不是「設定壞了」。
+    expect(config.ownerId).toBe("123");
+  });
+
+  it.each([
+    [
+      "SHEET_SPREADSHEET_ID 空著",
+      { GOOGLE_SERVICE_ACCOUNT_KEY_FILE: "/k.json", SHEET_SPREADSHEET_ID: "" },
+      "SHEET_SPREADSHEET_ID is required when GOOGLE_SERVICE_ACCOUNT_KEY_FILE is set",
+    ],
+    [
+      "GOOGLE_SERVICE_ACCOUNT_KEY_FILE 空著",
+      { GOOGLE_SERVICE_ACCOUNT_KEY_FILE: "", SHEET_SPREADSHEET_ID: "s1" },
+      "GOOGLE_SERVICE_ACCOUNT_KEY_FILE is required when SHEET_SPREADSHEET_ID is set",
+    ],
+  ])("一個填了、%s 時仍然拒絕啟動，並指出缺的那一個", (_name, partial, expectedMessage) => {
+    // 空字串等同沒設，所以這是真正的半設定，守衛必須照樣開火——而且要指對方向。
+    expect(() => {
+      loadConfig({ ...baseEnv, ...partial });
+    }).toThrow(expectedMessage);
+  });
+
+  it("兩個都填了值就啟用鏡像，前後空白會被修掉", () => {
+    expect(
+      loadConfig({
+        ...baseEnv,
+        GOOGLE_SERVICE_ACCOUNT_KEY_FILE: "  /k.json  ",
+        SHEET_SPREADSHEET_ID: "  s1  ",
+      }).sheets,
+    ).toEqual({ keyFile: "/k.json", spreadsheetId: "s1" });
+  });
+
   // M-1（M5c）：原本用交替正規表示式 `/A|B/` 斷言，兩個方向都會過，所以
   // 「缺哪一個變數」沒有被真的釘住——只設了金鑰路徑的使用者可能被告知
   // 「金鑰路徑 is required」，訊息指錯了方向也不會有測試發現。這裡改成
