@@ -109,10 +109,35 @@ async function sendOrEdit(
  * （markOutboxDelivered 會把 lease_expires_at 清成 NULL，所以遲到的 worker 之後
  * 一定對不上）。記一行然後正常繼續；硬蓋回去才是真正的災難——訊息其實已經送到，
  * /status 卻會顯示「待處理 1 筆 ⚠️」並發告警，按「重試全部」還會真的再送一次。
+ *
+ * 回傳「這次寫入有沒有落地」，也就是「我還是不是這一列的擁有者」。呼叫端必須用它
+ * 來決定要不要做**對外可見的副作用**：CAS 只擋得住資料庫那一半，擋不住已經送出去的
+ * 告警。見 notifyIfOwned。
  */
-async function recordOutcome(messageId: string, write: Promise<boolean>): Promise<void> {
-  if (await write) return;
-  logger.info("outbox row already had a newer result; not overwriting it", { messageId });
+function recordOutcome(messageId: string, write: Promise<boolean>): Promise<boolean> {
+  return write.then((applied) => {
+    if (!applied) {
+      logger.info("outbox row already had a newer result; not overwriting it", { messageId });
+    }
+    return applied;
+  });
+}
+
+/**
+ * 只有真正寫下 needs_attention 的那個 worker 才發告警。
+ *
+ * 少了這道閘門，過期的 worker 會對一列**已經 delivered** 的訊息推播
+ * 「有訊息送不出去……用 /status 查看並重試」，而 /status 正確地顯示一切正常——
+ * 一個自相矛盾的假警報，比修掉 CAS 之前那個「錯得一致」的狀態更讓人困惑，
+ * 而且它是我們自己加上去的。
+ */
+async function notifyIfOwned(
+  owned: boolean,
+  message: OutboxMessage,
+  deps: OutboxRunnerDependencies,
+): Promise<void> {
+  if (!owned) return;
+  await deps.onNeedsAttention(message);
 }
 
 async function handleDeliveryFailure(
@@ -143,7 +168,7 @@ async function handleDeliveryFailure(
     // sendMessage 不是 editMessageText——比照 give-up 處理，避免無窮遞迴。
     // 這個分支目前無法被觸發：故意留著的縱深防禦，不是漏改的死碼；不用花時間找
     // 一條會走到這裡的路徑。
-    await recordOutcome(
+    const owned = await recordOutcome(
       message.messageId,
       deps.repository.markOutboxNeedsAttention(
         message.messageId,
@@ -151,14 +176,14 @@ async function handleDeliveryFailure(
         leaseToken,
       ),
     );
-    await deps.onNeedsAttention(message);
+    await notifyIfOwned(owned, message, deps);
     return "needs_attention";
   }
 
   // outcome.kind === "retry"
   const attempts = message.attempts + 1;
   if (attempts >= MAX_ATTEMPTS) {
-    await recordOutcome(
+    const owned = await recordOutcome(
       message.messageId,
       deps.repository.markOutboxNeedsAttention(
         message.messageId,
@@ -166,7 +191,7 @@ async function handleDeliveryFailure(
         leaseToken,
       ),
     );
-    await deps.onNeedsAttention(message);
+    await notifyIfOwned(owned, message, deps);
     return "needs_attention";
   }
 

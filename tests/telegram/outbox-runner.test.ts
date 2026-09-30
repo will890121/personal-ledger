@@ -323,6 +323,38 @@ describe("outbox runner", () => {
     expect(await status(repository, "m1")).toBe("needs_attention");
   });
 
+  it("does not alert for a row whose result another worker already recorded", async () => {
+    // N1：CAS 只擋得住資料庫那一半。worker A 卡住 → lease 過期 → worker B 送達並標
+    // delivered → A 這才以 403 失敗：CAS 正確地擋下 A 的寫入，但告警是**已經送出去的
+    // 副作用**，擋不回來。使用者於是收到「有訊息送不出去……用 /status 查看並重試」，
+    // 而 /status 正確地顯示一切正常——一個自相矛盾的假警報。
+    const { runner, repository, onNeedsAttention, advance } = harness();
+    enqueue(repository, { messageId: "m1" });
+
+    // A 的送出卡住，測試自己決定它何時、以什麼方式結束。
+    let failStuckSend: ((error: unknown) => void) | undefined;
+    api.sendMessage.mockImplementationOnce(
+      () =>
+        new Promise<{ message_id: number }>((_resolve, reject) => {
+          failStuckSend = reject;
+        }),
+    );
+    const drainA = runner.drainOnce();
+
+    // lease 過期，B 重新撈到同一列並送達。
+    advance(60_000);
+    await runner.drainOnce();
+    expect(await status(repository, "m1")).toBe("delivered");
+
+    // A 到現在才失敗，手上的是過期的 lease。
+    if (!failStuckSend) throw new Error("the stuck send was never started");
+    failStuckSend(grammyError(403, "Forbidden: bot was blocked by the user"));
+    await drainA;
+
+    expect(onNeedsAttention).not.toHaveBeenCalled();
+    expect(await status(repository, "m1")).toBe("delivered");
+  });
+
   it("does not deliver the same row twice when a drain overlaps the fast path", async () => {
     // lease 的用途：單一行程也可能有兩條路徑同時碰同一列。
     const { runner, api, repository } = harness();
