@@ -22,10 +22,16 @@ export interface SheetMirrorRunnerDependencies {
   readonly timezone: string;
   readonly now: () => Date;
   /**
-   * 記錄失敗用。刻意收窄成單一函式簽章，不直接 import src/logger.ts：
-   * logger.ts import 了 grammY（用來判斷 GrammyError），而 src/sheets/ 依邊界規則
-   * 不能依賴 grammY（見本檔案的 AC 邊界）。正式組裝（main.ts）會把 logger.error
-   * 傳進來，測試則用一個 vi.fn() 替身——兩邊的函式簽章相容。
+   * 記錄失敗用。刻意收窄成單一函式簽章：tick 只需要「有人記一行錯誤」這個能力，
+   * 記到哪裡是呼叫端的事。正式組裝（main.ts）會把 logger.error 傳進來，測試則用
+   * 一個 vi.fn() 替身——兩邊的函式簽章相容。
+   *
+   * 訂正：這段註解原本寫「logger.ts import 了 grammY，而 src/sheets/ 不能依賴
+   * grammY」。前半句不成立——`src/logger.ts` 從來沒有 import 過 grammY（判斷
+   * GrammyError 的是 src/telegram/delivery-error.ts），同一個目錄下的
+   * sheet-mirror.ts 也一直都直接 import logger。邊界規則本身是真的，現在由
+   * eslint.config.mjs 的 no-restricted-imports zone 把關（src/sheets/ 與
+   * src/logger.ts 都不得 import grammY），不再只是註解裡的一句宣稱。
    */
   readonly logError: (message: string, fields?: Record<string, unknown>) => void;
 }

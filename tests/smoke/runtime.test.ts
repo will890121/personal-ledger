@@ -11,10 +11,23 @@ import { logger } from "../../src/logger.js";
 import { composeRuntime } from "../../src/main.js";
 import { openDatabase } from "../../src/db/database.js";
 import type { SheetsClient } from "../../src/ports/sheets-client.js";
+import { createGoogleSheetsClient } from "../../src/sheets/google-sheets-client.js";
 import { ESCALATE_AFTER_FAILURES } from "../../src/sheets/sheet-failure.js";
 import { SYNC_INTERVAL_MS } from "../../src/sheets/sheet-mirror-runner.js";
 import { seedM1Ledger } from "../fixtures/m1-ledger.js";
 import { seedTransaction } from "../fixtures/sheet-sync-seed.js";
+
+/**
+ * 只把 `createGoogleSheetsClient` 包成一個看得到參數的 spy，實作仍然是真的
+ * （`importOriginal` 的那一份）。目的是釘住 main.ts 交給它的兩個欄位——
+ * 那條接線在正式環境是唯一入口，卻無法從 composeRuntime 的回傳值上觀察到。
+ * 用 passthrough 而不是替身：接線測試若連工廠都換掉，就又變成「元件是對的、
+ * 但沒人把它接起來」那一類全綠的假保證。
+ */
+vi.mock("../../src/sheets/google-sheets-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/sheets/google-sheets-client.js")>();
+  return { ...actual, createGoogleSheetsClient: vi.fn(actual.createGoogleSheetsClient) };
+});
 
 const temporaryDirectories: string[] = [];
 
@@ -283,6 +296,33 @@ describe("runtime 的 Sheets 鏡像接線", () => {
 
     try {
       expect(runtime.sheetRunner).not.toBeNull();
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it("把 keyFile 與 spreadsheetId 各自交給正確的欄位", async () => {
+    // 上面那條只斷言「runner 不是 null」：把 main.ts 裡的 keyFile 與 spreadsheetId
+    // 互換，測試依然全綠（實測過）。互換之後正式環境會拿試算表 id 當金鑰檔路徑去
+    // 認證、拿金鑰檔路徑當試算表 id 去讀寫——兩件事都要等到上線後第一次 tick 才炸，
+    // 而且錯誤訊息指向 Google 而不是指向接線。這條把那兩個欄位釘死。
+    //
+    // 工廠本身仍然是真的（mock factory 直接把 actual 的實作包進 vi.fn），
+    // composeRuntime 走的還是正式那條路，只是多了一個看得到參數的位置。
+    const keyFile = join(temporaryDirectory("ledger-key-args-"), "service-account.json");
+    vi.mocked(createGoogleSheetsClient).mockClear();
+
+    const runtime = await composeRuntime(
+      configFor(temporaryDirectory("ledger-sheets-args-"), {
+        keyFile,
+        spreadsheetId: "spreadsheet-1",
+      }),
+    );
+
+    try {
+      expect(vi.mocked(createGoogleSheetsClient).mock.calls).toEqual([
+        [{ keyFile, spreadsheetId: "spreadsheet-1" }],
+      ]);
     } finally {
       runtime.close();
     }

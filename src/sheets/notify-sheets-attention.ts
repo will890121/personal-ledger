@@ -12,8 +12,12 @@ import type { SheetSyncState } from "../ports/sheet-sync-repository.js";
  *     往外拋，不能自己吞掉——吞掉就等於謊報成功，使用者接下來十分鐘完全收不到
  *     任何告警，而他其實一則都還沒收到。記一行是我們的事，吞不吞是呼叫端的事。
  *
- * 不 import grammY（`src/sheets/` 的邊界），只要一個能送訊息的東西；
- * 也不 import `src/logger.ts`（它 import 了 grammY），改用注入的 logError。
+ * 不 import grammY（`src/sheets/` 的邊界，現由 eslint.config.mjs 的
+ * no-restricted-imports zone 把關），只要一個能送訊息的東西；日誌也走注入的
+ * logError，讓「送不出去時記什麼、記到哪」由呼叫端決定。
+ *
+ * 訂正：這段原本寫「不 import src/logger.ts（它 import 了 grammY）」——括號裡
+ * 那句不成立，`src/logger.ts` 從來沒有 import 過 grammY。
  */
 
 /** 刻意收窄：告警一律送新訊息，用不到 editMessageText。 */
