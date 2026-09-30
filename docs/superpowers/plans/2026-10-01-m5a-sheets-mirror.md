@@ -405,7 +405,16 @@ export interface SyncCursor {
 - [ ] **Step 2: 寫失敗的測試**
 
 `tests/db/sheet-sync-changes.test.ts`。先寫一個 seed 工具，直接以 SQL 塞資料（不經過
-application 層，這個 task 測的是查詢本身）：
+application 層，這個 task 測的是查詢本身）。
+
+> **2026-10-01 更正：下面這段 seed 與真實 schema 不符，實作時已修正。**
+> 它是照著 migration 檔案寫的、從未執行過 —— 也就是一個假設，不是事實。實際差異：
+> `input_events` 沒有 `chat_id`／`message_id`（真實欄位是 `telegram_update_id`、
+> `source_type`、`source_ref`）；`drafts` 的 `request_id` 與 `draft_json` 是 NOT NULL
+> 但 seed 沒給；`categories` 的 `kind` 與 `depth` 是 NOT NULL，且有 CHECK 綁定
+> `depth = 1` 時 `parent_id` 必須為 NULL；`transactions` 那句 `.run()` 傳了 12 個值
+> 對 11 個佔位符。
+> **以 `tests/db/sheet-sync-changes.test.ts` 的實際內容為準**，下面保留原文只為記錄。
 
 ```ts
 import Database from "better-sqlite3";
