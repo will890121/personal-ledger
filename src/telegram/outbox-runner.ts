@@ -14,12 +14,26 @@ import { classifyDeliveryError } from "./delivery-error.js";
  *
  * 已知且接受的重複：送出成功、但在 markOutboxDelivered 落地前行程死掉，
  * lease 過期後會被同一個迴圈再送一次——帳本只有一筆、使用者看到兩則訊息。
- * 寧可重複也不要遺失；lease 的長度就是這個重複的上限，不會無限重複。
+ * 寧可重複也不要遺失；lease 的長度就是這個重複的上限，不會無限重複——這句保證
+ * 靠的是 SEND_TIMEOUT_MS < LEASE_MS（見下），不是 lease 本身。
  */
 
 export const LEASE_MS = 30_000;
 const BATCH = 10;
 export const DRAIN_INTERVAL_MS = 5_000;
+
+/**
+ * 每一次送出呼叫自己的逾時。**必須始終小於 LEASE_MS**：上面那句「lease 的長度就是
+ * 這個重複的上限」只有在「一次送出不可能活得比 lease 久」時才成立。
+ *
+ * 少了它，卡住的 HTTP 呼叫會用 grammY 的預設 500 秒逾時，也就是比 lease 多活 470 秒：
+ * 期間每一輪 drain（5 秒一次）都會在 lease 過期後重新 claim 同一列再送一次，
+ * 同一則訊息因此可以同時有六個 in-flight 的送出。lease 限制的是重複的速率，不是次數。
+ *
+ * 刻意不去改 grammY client 的全域 timeoutSeconds：那會一併套用到 getUpdates 長輪詢。
+ * 逾時被中止的送出會走既有的失敗路徑（退避重試），這正是我們要的行為。
+ */
+export const SEND_TIMEOUT_MS = 20_000;
 
 export interface OutboxSendOptions {
   readonly reply_markup?: InlineKeyboardMarkup;
@@ -33,12 +47,14 @@ export interface OutboxApi {
     chatId: string,
     text: string,
     options: OutboxSendOptions,
+    signal: AbortSignal,
   ): Promise<{ message_id: number }>;
   editMessageText(
     chatId: string,
     messageId: number,
     text: string,
     options: OutboxSendOptions,
+    signal: AbortSignal,
   ): Promise<unknown>;
 }
 
@@ -71,16 +87,20 @@ async function sendOrEdit(
   forceNew: boolean,
 ): Promise<void> {
   const options = buildOptions(message);
+  // 每一次呼叫各自一個 signal：一次 sendOrEdit 最多走一條分支，但 resend-as-new
+  // 會再進來一次，逾時計時必須從那一次呼叫重新起算，不是整列共用一個。
+  const signal = AbortSignal.timeout(SEND_TIMEOUT_MS);
   if (!forceNew && message.targetMessageId !== undefined) {
     await deps.api.editMessageText(
       message.chatId,
       Number(message.targetMessageId),
       message.text,
       options,
+      signal,
     );
     return;
   }
-  await deps.api.sendMessage(message.chatId, message.text, options);
+  await deps.api.sendMessage(message.chatId, message.text, options, signal);
 }
 
 async function handleDeliveryFailure(

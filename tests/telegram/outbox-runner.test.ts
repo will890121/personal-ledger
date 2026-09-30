@@ -5,6 +5,8 @@ import type { OutboxCause, OutboxStatus } from "../../src/domain/outbox.js";
 import { logger } from "../../src/logger.js";
 import {
   createOutboxRunner,
+  LEASE_MS,
+  SEND_TIMEOUT_MS,
   type OutboxApi,
   type OutboxRunnerDependencies,
 } from "../../src/telegram/outbox-runner.js";
@@ -137,7 +139,13 @@ describe("outbox runner", () => {
 
     await runner.drainOnce();
 
-    expect(api.editMessageText).toHaveBeenCalledWith("55", 77, "已入帳", expect.anything());
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      "55",
+      77,
+      "已入帳",
+      expect.anything(),
+      expect.any(AbortSignal),
+    );
     expect(await status(repository, "m1")).toBe("delivered");
   });
 
@@ -323,6 +331,27 @@ describe("outbox runner", () => {
     await Promise.all([runner.drainOnce(), runner.drainOnce()]);
 
     expect(api.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it("times a send out well before its lease expires", () => {
+    // I1：檔頭註解宣稱「lease 的長度就是這個重複的上限」。這句話只有在一次送出
+    // 不可能活得比 lease 久時才成立——grammY 的預設 API 逾時是 500 秒，比 lease
+    // 多活 470 秒，期間每一輪 drain 都會重新 claim 同一列再送一次（實測 6 次併發）。
+    // 這兩個常數的大小關係就是那句保證本身，所以直接把它釘死。
+    expect(SEND_TIMEOUT_MS).toBeLessThan(LEASE_MS);
+  });
+
+  it("passes that timeout to every delivery call as an abort signal", async () => {
+    // 上面那條關係只有在 signal 真的被傳下去時才有意義：少了這個參數，
+    // grammY 會用它自己的 500 秒預設，關係再正確也管不到任何東西。
+    const { runner, repository } = harness();
+    enqueue(repository, { messageId: "edit", targetMessageId: "77" });
+    enqueue(repository, { messageId: "send" });
+
+    await runner.drainOnce();
+
+    expect(api.editMessageText.mock.calls[0]?.[4]).toBeInstanceOf(AbortSignal);
+    expect(api.sendMessage.mock.calls[0]?.[3]).toBeInstanceOf(AbortSignal);
   });
 
   it("logs a rejected background drain instead of letting it kill the process", async () => {

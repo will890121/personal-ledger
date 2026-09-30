@@ -54,6 +54,16 @@ function isMessageNotModifiedError(error: unknown): boolean {
   );
 }
 
+// grammY 在 Node 上把 signal 參數的型別宣告成 abort-controller 這個 polyfill 的
+// AbortSignal（out/shim.node.d.ts），它與全域（@types/node）的 AbortSignal 結構上
+// 不相容，但執行期是同一件事——grammY 只是把它交給 fetch，而 fetch 認得的正是
+// 全域那一個。轉型只出現在這個邊界，OutboxApi 那側用的是標準型別；型別從
+// bot.api 推導而不是寫死 polyfill 的名字，grammY 換掉 shim 時這裡會跟著走。
+type GrammySignal = Parameters<Bot["api"]["sendMessage"]>[3];
+function toGrammySignal(signal: AbortSignal): GrammySignal {
+  return signal as unknown as GrammySignal;
+}
+
 export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot {
   const bot = dependencies.botInfo
     ? new Bot(dependencies.token, { botInfo: dependencies.botInfo })
@@ -70,9 +80,13 @@ export function createLedgerBot(dependencies: CreateLedgerBotOptions): LedgerBot
       ownerId: dependencies.ownerId,
       now: dependencies.now,
       api: {
-        sendMessage: (chatId, text, options) => bot.api.sendMessage(chatId, text, options),
-        editMessageText: (chatId, messageId, text, options) =>
-          bot.api.editMessageText(chatId, messageId, text, options),
+        // signal 一路傳到 grammY：runner 給的是一個明顯短於 lease 的逾時，
+        // 這樣一次卡住的呼叫才不會活得比 lease 久、讓同一列被重複送出。
+        // 不動 client 的全域 timeoutSeconds——那會一併套用到 getUpdates 長輪詢。
+        sendMessage: (chatId, text, options, signal) =>
+          bot.api.sendMessage(chatId, text, options, toGrammySignal(signal)),
+        editMessageText: (chatId, messageId, text, options, signal) =>
+          bot.api.editMessageText(chatId, messageId, text, options, toGrammySignal(signal)),
       },
       onNeedsAttention: createAttentionNotifier({
         repository: dependencies.repository,
