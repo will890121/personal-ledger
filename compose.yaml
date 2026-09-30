@@ -9,8 +9,31 @@ services:
       DATABASE_PATH: /app/data/personal-ledger.sqlite
       TZ: Asia/Taipei
       LEDGER_CURRENCY: TWD
+      # Sheets 鏡像的兩個變數。刻意寫成「只有鍵、沒有值」而不是 ${VAR}：
+      #
+      # 這個明列式清單本來沒有這兩行，後果比「功能沒生效」更糟——使用者在 .env 裡把
+      # 兩個都設好、重啟、看不到任何錯誤，然後沒有鏡像。因為從容器內部看是**兩個都
+      # 沒設**，於是 src/config.ts 判定「鏡像關閉」，而特地加的「只設一半就拒絕啟動」
+      # 那道守衛根本不會觸發：在容器的視角裡這是零設定，不是半設定。
+      #
+      # 而寫成 ${GOOGLE_SERVICE_ACCOUNT_KEY_FILE} 會換成另一個 bug：compose 對未設定的
+      # 變數會代換成**空字串並且真的設進容器**，src/config.ts 的 min(1) 會因此拒絕啟動，
+      # 於是沒有 Sheets 憑證的機器連 bot 都起不來。只有鍵的寫法在變數沒設時是「不傳」
+      # （已用 docker compose run 實測：未設定→容器內完全不存在該變數），
+      # 有設時才從 .env／shell 帶進來——這正好對上「兩個都沒設＝鏡像關閉」的語意。
+      GOOGLE_SERVICE_ACCOUNT_KEY_FILE:
+      SHEET_SPREADSHEET_ID:
     volumes:
       - ledger-data:/app/data
+      # 服務帳號金鑰**唯讀**掛載。約定路徑：主機 ./secrets → 容器 /app/secrets，
+      # 所以 .env 裡的 GOOGLE_SERVICE_ACCOUNT_KEY_FILE 要寫容器內的那個路徑
+      # （/app/secrets/google-service-account.json），不是主機路徑。
+      #
+      # 掛目錄而不是單一檔案：單檔的 bind mount 在主機檔案不存在時，Docker 會在那個
+      # 路徑上**建一個目錄**，接著 GoogleAuth 讀到的是目錄、錯誤訊息完全指不到真正的
+      # 原因。掛目錄則在沒有金鑰時安靜地退化成一個空目錄（而兩個變數沒設時鏡像本來
+      # 就是關閉的）。secrets/ 只放這一份金鑰，別放其他東西。
+      - ./secrets:/app/secrets:ro
 
 volumes:
   ledger-data:
