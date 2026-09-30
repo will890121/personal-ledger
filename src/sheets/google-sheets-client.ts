@@ -187,6 +187,25 @@ export interface GoogleSheetsClientOptions {
   /** 服務帳號金鑰檔的路徑（`GOOGLE_SERVICE_ACCOUNT_KEY_FILE`）。 */
   readonly keyFile: string;
   readonly spreadsheetId: string;
+  /**
+   * 測試用接縫：略過 GoogleAuth 與 googleapis 的網路呼叫，直接餵一組假的原始
+   * 請求進來。比照 `main.ts` 的 `RuntimeOverrides.sheetsClient`——**正式環境
+   * 永遠不傳這個參數**。留著它的唯一理由，是讓測試能真的呼叫
+   * `createGoogleSheetsClient` 本身，斷言它有沒有包上 `withHeaderRows`，
+   * 而不必準備憑證或碰網路（見下方函式說明）。
+   */
+  readonly requests?: SheetsApiRequests;
+}
+
+/** 正式環境才會走的那條路：真的建立 GoogleAuth 與 googleapis 的 client。 */
+function realRequests(keyFile: string): SheetsApiRequests {
+  const auth = new google.auth.GoogleAuth({ keyFile, scopes: SCOPES });
+  const api = google.sheets({ version: "v4", auth });
+  return {
+    getSpreadsheet: (params) => api.spreadsheets.get(params),
+    getValues: (params) => api.spreadsheets.values.get(params),
+    batchUpdate: (params) => api.spreadsheets.batchUpdate(params),
+  };
 }
 
 /**
@@ -198,16 +217,6 @@ export interface GoogleSheetsClientOptions {
  * 這樣「忘記接標題列」就不是一個做得到的錯誤。
  */
 export function createGoogleSheetsClient(options: GoogleSheetsClientOptions): SheetsClient {
-  const auth = new google.auth.GoogleAuth({ keyFile: options.keyFile, scopes: SCOPES });
-  const api = google.sheets({ version: "v4", auth });
-  return withHeaderRows(
-    createSheetsClientForApi(
-      {
-        getSpreadsheet: (params) => api.spreadsheets.get(params),
-        getValues: (params) => api.spreadsheets.values.get(params),
-        batchUpdate: (params) => api.spreadsheets.batchUpdate(params),
-      },
-      options.spreadsheetId,
-    ),
-  );
+  const api = options.requests ?? realRequests(options.keyFile);
+  return withHeaderRows(createSheetsClientForApi(api, options.spreadsheetId));
 }

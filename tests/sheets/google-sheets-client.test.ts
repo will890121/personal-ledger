@@ -1,11 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { google } from "googleapis";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SheetCell } from "../../src/domain/sheet-rows.js";
 import {
   columnLetter,
+  createGoogleSheetsClient,
   createSheetsClientForApi,
   type SheetsApiRequests,
 } from "../../src/sheets/google-sheets-client.js";
+
+// M-3：只在這個檔案裡把 googleapis 換成記錄器，用來斷言真正傳給 GoogleAuth
+// 的 scopes——不能只斷言 SCOPES 這個常數本身的值，那樣的話同一次修改（把常數
+// 改壞）會連斷言一起改壞，測試永遠是綠的。這裡繞過整個模組，直接看
+// createGoogleSheetsClient 實際餵給 google.auth.GoogleAuth 建構子的參數。
+vi.mock("googleapis", () => ({
+  google: {
+    auth: { GoogleAuth: vi.fn().mockImplementation(() => ({})) },
+    sheets: vi.fn().mockReturnValue({
+      spreadsheets: { get: vi.fn(), values: { get: vi.fn() }, batchUpdate: vi.fn() },
+    }),
+  },
+}));
 
 const SPREADSHEET = "spreadsheet-1";
 
@@ -255,5 +270,39 @@ describe("Google Sheets adapter：updateCells", () => {
       /1-based/,
     );
     expect(recorded.batchUpdateCalls).toEqual([]);
+  });
+});
+
+describe("createGoogleSheetsClient", () => {
+  it("一定包著 withHeaderRows：全新分頁的第一次 updateCells 前會先讀三張分頁的既有內容", async () => {
+    // I-1：review 發現把這個 factory 的回傳值換成裸 client（不包 withHeaderRows）
+    // 一樣能讓全部測試綠燈——因為唯一驗證 withHeaderRows 行為的測試，測的是
+    // 測試自己包出來的 client，不是這個 factory 真正組出來的那個。這裡用
+    // `requests` 接縫繞過 GoogleAuth／網路，直接呼叫正式工廠本身：withHeaderRows
+    // 在真正寫入前一定會先讀三張分頁各自現有的標題列，才知道要不要補；
+    // 裸 client 不會有這三次讀取。
+    const recorded = recordedApi();
+    const client = createGoogleSheetsClient({
+      keyFile: "/unused.json",
+      spreadsheetId: SPREADSHEET,
+      requests: recorded.api,
+    });
+
+    await client.updateCells([
+      { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "a" }] },
+    ]);
+
+    expect(recorded.getValuesCalls).toHaveLength(3);
+  });
+
+  it("服務帳號的 OAuth scope 只到這張試算表，不到整個 Drive", () => {
+    // M-3：金鑰一旦外洩，scope 就是「只能碰這張試算表」與「能碰整個 Drive」的
+    // 差別，值得一條斷言釘住目前的字串。這裡刻意不傳 `requests`，走真正組裝
+    // GoogleAuth 的那條路（google.auth.GoogleAuth 已在檔案頂端換成記錄器）。
+    createGoogleSheetsClient({ keyFile: "/unused.json", spreadsheetId: SPREADSHEET });
+
+    expect(google.auth.GoogleAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ["https://www.googleapis.com/auth/spreadsheets"] }),
+    );
   });
 });
