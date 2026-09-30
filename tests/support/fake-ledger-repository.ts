@@ -7,6 +7,12 @@ import {
   type TransactionDraft,
 } from "../../src/domain/ledger.js";
 import type {
+  OutboxCause,
+  OutboxMessage,
+  OutboxPayload,
+  OutboxStatus,
+} from "../../src/domain/outbox.js";
+import type {
   AuditEvent,
   BatchInput,
   DeleteTransactionCommand,
@@ -15,11 +21,53 @@ import type {
   DraftSelector,
   InputEventInput,
   LedgerRepository,
+  OutboxRequest,
+  OutboxSummary,
   PendingDraftSummary,
   PendingQuery,
   PendingStatus,
   UpdateTransactionCommand,
 } from "../../src/ports/ledger-repository.js";
+
+// 內部可變版本：OutboxMessage 對外是 readonly 的投影，lease/created 是 DB 專屬的排程
+// 記帳，不屬於公開型別，所以額外多帶這兩個欄位。與 SqliteLedgerRepository 對齊：
+// lease 未過期就擋住重新取得、失敗要清空 lease 並 attempts+1、重試要把 attempts 歸零。
+interface FakeOutboxMessage {
+  messageId: string;
+  ownerId: string;
+  cause: OutboxCause;
+  chatId: string;
+  targetMessageId?: string;
+  text: string;
+  replyMarkup?: string;
+  status: OutboxStatus;
+  attempts: number;
+  nextAttemptAt: string;
+  leaseExpiresAt: string | null;
+  lastError?: string;
+  // 對應 SQLite 版的 created_at：訊息何時被排進佇列，summarizeOutbox 的 oldestPendingAt
+  // 與 stuck 清單排序都要用這個欄位，不是 nextAttemptAt——理由見
+  // SqliteLedgerRepository.summarizeOutbox 的註解。
+  createdAt: string;
+  sequence: number;
+  deliveredAt: string | null;
+}
+
+function toOutboxMessage(row: FakeOutboxMessage): OutboxMessage {
+  return {
+    messageId: row.messageId,
+    ownerId: row.ownerId,
+    cause: row.cause,
+    chatId: row.chatId,
+    ...(row.targetMessageId ? { targetMessageId: row.targetMessageId } : {}),
+    text: row.text,
+    ...(row.replyMarkup ? { replyMarkup: row.replyMarkup } : {}),
+    status: row.status,
+    attempts: row.attempts,
+    nextAttemptAt: row.nextAttemptAt,
+    ...(row.lastError ? { lastError: row.lastError } : {}),
+  };
+}
 
 interface FakeDraftRecord {
   draftId: string;
@@ -42,8 +90,164 @@ export class FakeLedgerRepository implements LedgerRepository {
   public readonly transactions = new Map<string, ConfirmedTransaction>();
   // 依插入順序保存稽核事件，供 listAuditEvents 依 ownerId/transactionId 過濾後回傳。
   public readonly auditEvents: AuditEvent[] = [];
+  public readonly outboxMessages = new Map<string, FakeOutboxMessage>();
   private refCounter = 0;
   private sequence = 0;
+  private outboxSequence = 0;
+
+  /** 測試用種子方法，對應 SQLite 版測試直接 INSERT INTO outbox_messages 的做法。 */
+  public seedOutboxMessage(input: {
+    messageId: string;
+    ownerId: string;
+    cause: OutboxCause;
+    chatId: string;
+    targetMessageId?: string;
+    text: string;
+    replyMarkup?: string;
+    nextAttemptAt: string;
+    attempts?: number;
+    // 預設等於 nextAttemptAt，與 SQLite 版測試的 seed() 相同約定；需要「已退避、
+    // next_attempt_at 被推到未來」的情境時才明確傳入更早的值。
+    createdAt?: string;
+  }): void {
+    this.outboxSequence += 1;
+    this.outboxMessages.set(input.messageId, {
+      messageId: input.messageId,
+      ownerId: input.ownerId,
+      cause: input.cause,
+      chatId: input.chatId,
+      ...(input.targetMessageId ? { targetMessageId: input.targetMessageId } : {}),
+      text: input.text,
+      ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {}),
+      status: "pending",
+      attempts: input.attempts ?? 0,
+      nextAttemptAt: input.nextAttemptAt,
+      leaseExpiresAt: null,
+      createdAt: input.createdAt ?? input.nextAttemptAt,
+      sequence: this.outboxSequence,
+      deliveredAt: null,
+    });
+  }
+
+  public claimDueOutbox(
+    ownerId: string,
+    now: string,
+    leaseUntil: string,
+    limit: number,
+  ): Promise<OutboxMessage[]> {
+    const due = [...this.outboxMessages.values()]
+      .filter(
+        (row) =>
+          row.ownerId === ownerId &&
+          row.status === "pending" &&
+          row.nextAttemptAt <= now &&
+          // lease 未過期就擋住重新取得，語意須與 SqliteLedgerRepository 一致。
+          (row.leaseExpiresAt === null || row.leaseExpiresAt <= now),
+      )
+      .sort((left, right) => left.nextAttemptAt.localeCompare(right.nextAttemptAt))
+      .slice(0, limit);
+    for (const row of due) row.leaseExpiresAt = leaseUntil;
+    return Promise.resolve(due.map((row) => toOutboxMessage(row)));
+  }
+
+  // 樂觀鎖，語意必須與 SqliteLedgerRepository 的 `lease_expires_at IS ?` 逐字對齊：
+  // 只有 leaseExpiresAt 仍等於 claim 當下寫入的那個值時才寫得進去，null 是一個
+  // 真正的版本值（「沒有人租走這一列」），不是「不檢查」。
+  private casOutbox(messageId: string, leaseToken: string | null): FakeOutboxMessage | undefined {
+    const row = this.outboxMessages.get(messageId);
+    if (!row || row.leaseExpiresAt !== leaseToken) return undefined;
+    return row;
+  }
+
+  public markOutboxDelivered(
+    messageId: string,
+    deliveredAt: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const row = this.casOutbox(messageId, leaseToken);
+    if (!row) return Promise.resolve(false);
+    row.status = "delivered";
+    row.deliveredAt = deliveredAt;
+    row.leaseExpiresAt = null;
+    return Promise.resolve(true);
+  }
+
+  public markOutboxFailed(
+    messageId: string,
+    nextAttemptAt: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const row = this.casOutbox(messageId, leaseToken);
+    if (!row) return Promise.resolve(false);
+    // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
+    row.attempts += 1;
+    row.nextAttemptAt = nextAttemptAt;
+    row.lastError = lastError;
+    row.leaseExpiresAt = null;
+    return Promise.resolve(true);
+  }
+
+  public markOutboxNeedsAttention(
+    messageId: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const row = this.casOutbox(messageId, leaseToken);
+    if (!row) return Promise.resolve(false);
+    row.status = "needs_attention";
+    row.lastError = lastError;
+    row.leaseExpiresAt = null;
+    return Promise.resolve(true);
+  }
+
+  public retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number> {
+    let changed = 0;
+    for (const row of this.outboxMessages.values()) {
+      if (row.ownerId !== ownerId || row.status !== "needs_attention") continue;
+      row.status = "pending";
+      row.attempts = 0;
+      row.nextAttemptAt = nextAttemptAt;
+      row.leaseExpiresAt = null;
+      changed += 1;
+    }
+    return Promise.resolve(changed);
+  }
+
+  public summarizeOutbox(ownerId: string): Promise<OutboxSummary> {
+    const owned = [...this.outboxMessages.values()].filter((row) => row.ownerId === ownerId);
+    const pending = owned.filter((row) => row.status === "pending");
+    const needsAttention = owned.filter((row) => row.status === "needs_attention");
+    const delivered = owned.filter((row) => row.deliveredAt !== null);
+    // 用 createdAt（排進佇列的時間），不是 nextAttemptAt（下一次到期時間）：
+    // 已經失敗過的訊息 nextAttemptAt 會因退避被推到未來，拿它當「最舊」會讓 /status
+    // 顯示負的等待分鐘數，見 SqliteLedgerRepository.summarizeOutbox 的同一段說明。
+    const oldestPendingAt = pending.reduce<string | null>(
+      (oldest, row) => (oldest === null || row.createdAt < oldest ? row.createdAt : oldest),
+      null,
+    );
+    const lastDeliveredAt = delivered.reduce<string | null>(
+      (latest, row) =>
+        row.deliveredAt !== null && (latest === null || row.deliveredAt > latest)
+          ? row.deliveredAt
+          : latest,
+      null,
+    );
+    const stuck = needsAttention
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.sequence - right.sequence,
+      )
+      .slice(0, 5)
+      .map((row) => toOutboxMessage(row));
+    return Promise.resolve({
+      pending: pending.length,
+      needsAttention: needsAttention.length,
+      oldestPendingAt,
+      lastDeliveredAt,
+      stuck,
+    });
+  }
 
   private nextDraftRef(): string {
     this.refCounter += 1;
@@ -210,6 +414,7 @@ export class FakeLedgerRepository implements LedgerRepository {
     draftId: string,
     confirmedAt: string,
     auditEventId: string,
+    outbox: OutboxRequest<ConfirmedTransaction>,
   ): Promise<ConfirmedTransaction> {
     if (!auditEventId) {
       return Promise.reject(new Error("audit event id is required"));
@@ -220,6 +425,7 @@ export class FakeLedgerRepository implements LedgerRepository {
     }
     const existing = this.transactions.get(draft.requestId);
     if (existing) {
+      // 重複確認：outbox 已經有一列了，這裡不推。
       return Promise.resolve(existing);
     }
     if (draft.status === "cancelled") {
@@ -236,7 +442,41 @@ export class FakeLedgerRepository implements LedgerRepository {
     this.drafts.set(draftId, { ...draft, status: "confirmed" });
     const record = this.records.get(draftId);
     if (record) record.status = "confirmed";
+    this.enqueueOutbox(
+      outbox.messageId,
+      draft.ownerId,
+      outbox.cause,
+      outbox.render(transaction),
+      confirmedAt,
+    );
     return Promise.resolve(transaction);
+  }
+
+  /** 與 SqliteLedgerRepository.enqueueOutbox 對齊：只在帳本變更成功時呼叫。 */
+  private enqueueOutbox(
+    messageId: string,
+    ownerId: string,
+    cause: OutboxCause,
+    payload: OutboxPayload,
+    now: string,
+  ): void {
+    this.outboxSequence += 1;
+    this.outboxMessages.set(messageId, {
+      messageId,
+      ownerId,
+      cause,
+      chatId: payload.chatId,
+      ...(payload.targetMessageId ? { targetMessageId: payload.targetMessageId } : {}),
+      text: payload.text,
+      ...(payload.replyMarkup ? { replyMarkup: payload.replyMarkup } : {}),
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: now,
+      leaseExpiresAt: null,
+      createdAt: now,
+      sequence: this.outboxSequence,
+      deliveredAt: null,
+    });
   }
 
   public getTransaction(
@@ -250,7 +490,10 @@ export class FakeLedgerRepository implements LedgerRepository {
     );
   }
 
-  public updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction> {
+  public updateTransaction(
+    command: UpdateTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     const current = [...this.transactions.entries()].find(
       ([, item]) =>
         item.ownerId === command.ownerId && item.transactionId === command.transactionId,
@@ -276,10 +519,20 @@ export class FakeLedgerRepository implements LedgerRepository {
       after: updated,
       createdAt: command.changedAt,
     });
+    this.enqueueOutbox(
+      outbox.messageId,
+      command.ownerId,
+      outbox.cause,
+      outbox.render(updated),
+      command.changedAt,
+    );
     return Promise.resolve(updated);
   }
 
-  public softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction> {
+  public softDeleteTransaction(
+    command: DeleteTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     return this.getTransaction(command.ownerId, command.transactionId).then((current) => {
       if (!current) throw new Error("transaction not found for owner");
       if ((current.updatedAt ?? current.confirmedAt) !== command.expectedUpdatedAt) {
@@ -305,6 +558,13 @@ export class FakeLedgerRepository implements LedgerRepository {
         after: deleted,
         createdAt: command.changedAt,
       });
+      this.enqueueOutbox(
+        outbox.messageId,
+        command.ownerId,
+        outbox.cause,
+        outbox.render(deleted),
+        command.changedAt,
+      );
       return deleted;
     });
   }

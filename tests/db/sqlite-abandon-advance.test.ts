@@ -9,6 +9,16 @@ import { SqliteLedgerRepository } from "../../src/db/sqlite-ledger-repository.js
 // 這個測試刻意避開 FakeLedgerRepository：放棄回收會先刪除代墊交易的全部配置再重建，
 // 而 migration 0005 的 allocations.recovers_allocation_id 是指向 allocations 的外鍵，
 // 只有真實 SQLite（開啟 foreign_keys）才會檢查這個接縫。
+// 測試不關心遞送內容，只需要滿足 confirmDraft 的必填 outbox 參數；messageId 逐次帶入
+// 不同值，避免同一個資料庫裡違反 outbox_messages.message_id 的唯一鍵。
+function testOutbox(messageId: string) {
+  return {
+    messageId,
+    cause: "transaction_confirmed" as const,
+    render: () => ({ chatId: "1", text: "ok" }),
+  };
+}
+
 interface AbandonScenario {
   readonly repository: SqliteLedgerRepository;
   readonly database: ReturnType<typeof openDatabase>;
@@ -66,6 +76,7 @@ async function setupPartiallyRecoveredAdvance(): Promise<AbandonScenario> {
     "advance-draft",
     "2026-09-10T01:01:00.000Z",
     "advance-audit",
+    testOutbox("outbox-advance"),
   );
 
   await repository.recordInputEvent({
@@ -97,7 +108,12 @@ async function setupPartiallyRecoveredAdvance(): Promise<AbandonScenario> {
     ],
     status: "awaiting_confirmation",
   });
-  await repository.confirmDraft("recovery-draft", "2026-09-15T01:01:00.000Z", "recovery-audit");
+  await repository.confirmDraft(
+    "recovery-draft",
+    "2026-09-15T01:01:00.000Z",
+    "recovery-audit",
+    testOutbox("outbox-recovery"),
+  );
 
   return { repository, database, transactionId: advance.transactionId };
 }
@@ -120,6 +136,7 @@ describe("abandonAdvance on a real sqlite repository", () => {
         generateId: () => `abandon-${String(++counter)}`,
         now: () => new Date("2026-09-24T01:00:00.000Z"),
       },
+      testOutbox("outbox-abandon"),
     );
 
     expect(result.kind).toBe("abandoned");

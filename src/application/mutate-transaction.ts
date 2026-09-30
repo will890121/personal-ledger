@@ -3,6 +3,7 @@ import type {
   DeleteTransactionCommand,
   InputEventInput,
   LedgerRepository,
+  OutboxRequest,
   UpdateTransactionCommand,
 } from "../ports/ledger-repository.js";
 
@@ -24,18 +25,22 @@ async function recordMutationInput(
   }
 }
 
+// outbox 是必填：帳本一旦變了就要保證使用者收到訊息，設成選填很容易在新增呼叫端時
+// 忘記帶，而漏掉不會有任何編譯錯誤（與 Task 5 的 confirmDraft 同一個理由）。
 export async function updateConfirmedTransaction(
   command: UpdateTransactionCommand,
   dependencies: MutationDependencies,
+  outbox: OutboxRequest<ConfirmedTransaction>,
 ): Promise<ConfirmedTransaction> {
   await recordMutationInput(command.sourceEventId, dependencies);
-  return dependencies.repository.updateTransaction(command);
+  return dependencies.repository.updateTransaction(command, outbox);
 }
 
 export async function softDeleteConfirmedTransaction(
   command: DeleteTransactionCommand,
   dependencies: MutationDependencies,
+  outbox: OutboxRequest<ConfirmedTransaction>,
 ): Promise<ConfirmedTransaction> {
   await recordMutationInput(command.sourceEventId, dependencies);
-  return dependencies.repository.softDeleteTransaction(command);
+  return dependencies.repository.softDeleteTransaction(command, outbox);
 }

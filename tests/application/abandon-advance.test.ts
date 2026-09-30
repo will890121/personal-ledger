@@ -9,6 +9,15 @@ import {
 import { ConfirmedTransactionSchema, type ConfirmedTransaction } from "../../src/domain/ledger.js";
 import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
 
+// 測試不關心遞送內容，只需要滿足 abandonAdvance 的必填 outbox 參數。
+function testOutbox() {
+  return {
+    messageId: "outbox-abandon",
+    cause: "advance_abandoned" as const,
+    render: () => ({ chatId: "1", text: "ok" }),
+  };
+}
+
 const baseCommand: AbandonAdvanceCommand = {
   ownerId: "owner-1",
   allocationId: "advance-allocation",
@@ -95,7 +104,7 @@ describe("abandonAdvance", () => {
   it("splits a partially recovered advance and keeps the transaction total", async () => {
     const { dependencies } = await setupAdvanceWithRecovery("630", "300");
 
-    const result = await abandonAdvance({ ...baseCommand }, dependencies);
+    const result = await abandonAdvance({ ...baseCommand }, dependencies, testOutbox());
 
     expect(result.kind).toBe("abandoned");
     if (result.kind !== "abandoned") return;
@@ -113,7 +122,7 @@ describe("abandonAdvance", () => {
   it("converts the whole allocation when nothing was recovered", async () => {
     const { dependencies } = await setupAdvanceWithRecovery("630", "0");
 
-    const result = await abandonAdvance({ ...baseCommand }, dependencies);
+    const result = await abandonAdvance({ ...baseCommand }, dependencies, testOutbox());
 
     expect(result.kind).toBe("abandoned");
     if (result.kind !== "abandoned") return;
@@ -124,7 +133,7 @@ describe("abandonAdvance", () => {
   it("reports when the advance is already fully recovered", async () => {
     const { dependencies } = await setupAdvanceWithRecovery("630", "630");
 
-    expect(await abandonAdvance({ ...baseCommand }, dependencies)).toEqual({
+    expect(await abandonAdvance({ ...baseCommand }, dependencies, testOutbox())).toEqual({
       kind: "nothing_to_abandon",
     });
   });
@@ -133,14 +142,18 @@ describe("abandonAdvance", () => {
     const { dependencies } = await setupAdvanceWithRecovery("630", "0");
 
     expect(
-      await abandonAdvance({ ...baseCommand, allocationId: "missing-allocation" }, dependencies),
+      await abandonAdvance(
+        { ...baseCommand, allocationId: "missing-allocation" },
+        dependencies,
+        testOutbox(),
+      ),
     ).toEqual({ kind: "not_found" });
   });
 
   it("keeps the abandoned expense on the advance's original date", async () => {
     const { dependencies } = await setupAdvanceWithRecovery("630", "300");
 
-    const result = await abandonAdvance({ ...baseCommand }, dependencies);
+    const result = await abandonAdvance({ ...baseCommand }, dependencies, testOutbox());
 
     expect(result.kind).toBe("abandoned");
     if (result.kind !== "abandoned") return;
@@ -150,7 +163,7 @@ describe("abandonAdvance", () => {
   it("writes an audit event with before and after snapshots", async () => {
     const { dependencies, repository } = await setupAdvanceWithRecovery("630", "300");
 
-    await abandonAdvance({ ...baseCommand }, dependencies);
+    await abandonAdvance({ ...baseCommand }, dependencies, testOutbox());
 
     const events = await repository.listAuditEvents("owner-1", "advance-transaction");
     expect(events.at(-1)?.action).toBe("transaction_updated");

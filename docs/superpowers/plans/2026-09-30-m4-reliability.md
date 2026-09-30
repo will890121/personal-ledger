@@ -229,8 +229,14 @@ describe("migration 0008", () => {
         .run(cause, status);
     };
 
-    expect(() => insert("something_else", "pending")).toThrow(/CHECK/);
-    expect(() => insert("transaction_confirmed", "queued")).toThrow(/CHECK/);
+    // arrow 的主體要用大括號包起來：本專案的 eslint 有 no-confusing-void-expression，
+    // 單行 arrow 回傳 void 運算式會被判定為錯誤。
+    expect(() => {
+      insert("something_else", "pending");
+    }).toThrow(/CHECK/);
+    expect(() => {
+      insert("transaction_confirmed", "queued");
+    }).toThrow(/CHECK/);
   });
 
   it("registers version 8 and stays idempotent", () => {
@@ -475,6 +481,14 @@ describe("classifyDeliveryError", () => {
     ).toEqual({ kind: "retry", retryAfterMs: 12_000 });
   });
 
+  it("retries a 429 that carries no retry_after", () => {
+    // Telegram 不一定會附上 retry_after。少了這個案例，這條分支可以被改成 give-up
+    // 而測試全綠——審查時實測過。
+    expect(classifyDeliveryError(grammyError(429, "Too Many Requests", {}))).toEqual({
+      kind: "retry",
+    });
+  });
+
   it("gives up on errors that retrying cannot fix", () => {
     // 被封鎖、聊天室不存在，重試一百次也一樣。訊息太長同理——那是內容問題不是網路問題。
     expect(classifyDeliveryError(grammyError(403, "Forbidden: bot was blocked by the user"))).toEqual(
@@ -615,15 +629,23 @@ describe("outbox storage", () => {
   });
   afterEach(() => database.close());
 
-  function seed(messageId: string, nextAttemptAt: string, replyMarkup?: string): void {
+  // created_at 必須明寫：欄位的 DEFAULT CURRENT_TIMESTAMP 產生的是
+  // `YYYY-MM-DD HH:MM:SS`，與本專案「所有時間都是 toISOString()」的規則不符，
+  // 而 summarizeOutbox 的 oldestPendingAt 讀的正是 created_at。
+  function seed(
+    messageId: string,
+    nextAttemptAt: string,
+    replyMarkup?: string,
+    createdAt?: string,
+  ): void {
     database
       .prepare(
         `INSERT INTO outbox_messages
            (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
-            status, next_attempt_at)
-         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', ?, 'pending', ?)`,
+            status, next_attempt_at, created_at)
+         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', ?, 'pending', ?, ?)`,
       )
-      .run(messageId, replyMarkup ?? null, nextAttemptAt);
+      .run(messageId, replyMarkup ?? null, nextAttemptAt, createdAt ?? nextAttemptAt);
   }
 
   it("claims only rows that are due and not already leased", async () => {
@@ -694,6 +716,16 @@ describe("outbox storage", () => {
       .prepare("SELECT next_attempt_at FROM outbox_messages WHERE message_id = 'due'")
       .get() as { next_attempt_at: string };
     expect(stored.next_attempt_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it("reports how long the oldest message has been queued, not when it is next due", async () => {
+    // `/status` 的「最舊 N 分鐘前」問的是「卡了多久」＝ created_at。next_attempt_at 是
+    // 「下次何時該送」，正在退避的列那個時間在未來，拿它算會得出負的年齡。
+    seed("retrying", LATER, undefined, NOW);
+
+    await expect(repository.summarizeOutbox("owner-1")).resolves.toMatchObject({
+      oldestPendingAt: NOW,
+    });
   });
 
   it("summarises what /status needs", async () => {
@@ -1011,17 +1043,30 @@ describe("confirmDraft writes the ledger change and its message together", () =>
       chat_id: string;
       target_message_id: string;
       attempts: number;
+      created_at: string;
     };
     // 渲染函式必須在 transaction 內、交易產生之後被呼叫，否則拿不到 transactionId。
     expect(row.text).toBe(`已入帳：交易 ID ${confirmed.transactionId}`);
     expect(row).toMatchObject({ status: "pending", chat_id: "55", target_message_id: "77", attempts: 0 });
+    // created_at 必須是明寫的 ISO 字串。少了這條斷言，把它從 INSERT 拿掉讓欄位落到
+    // DEFAULT CURRENT_TIMESTAMP（`YYYY-MM-DD HH:MM:SS`）整份測試仍然全綠，而
+    // summarizeOutbox 的 oldestPendingAt 讀的就是這個欄位。
+    expect(row.created_at).toBe("2026-09-30T01:01:00.000Z");
   });
 
   it("leaves no message behind when the ledger write fails", async () => {
     // 原子性的另一半：交易沒成立就不該有待送訊息。
-    await expect(
-      repository.confirmDraft("draft-missing", "2026-09-30T01:01:00.000Z", "audit-2", outbox("outbox-2")),
-    ).rejects.toThrow(/draft not found/);
+    // confirmDraft 是同步拋出（better-sqlite3 的 .immediate() 直接 rethrow，不是回傳被
+    // reject 的 Promise），因此用 expect(() => ...).toThrow 而不是 rejects.toThrow——
+    // 與 sqlite-advances.test.ts 既有的慣例一致。
+    expect(() => {
+      void repository.confirmDraft(
+        "draft-missing",
+        "2026-09-30T01:01:00.000Z",
+        "audit-2",
+        outbox("outbox-2"),
+      );
+    }).toThrow(/draft not found/);
 
     expect(database.prepare("SELECT count(*) AS total FROM outbox_messages").get()).toEqual({
       total: 0,
@@ -1359,6 +1404,13 @@ describe("confirming a draft", () => {
     // …建立草稿、按確認…
     expect(getText(calls.at(-1))).toContain("已入帳");
     expect(await outboxStatus(repository)).toBe("delivered");
+    // 必須斷言「只送了一次」。只檢查最後一則訊息的內容與 outbox 狀態的話，一個同時
+    // drainOnce() 又自己 editMessageText() 的 handler 會照樣通過——而「不得有兩個
+    // 送出者」正是這個 task 走 outbox 的全部理由。
+    const deliveries = calls.filter(
+      (call) => call.method === "sendMessage" || call.method === "editMessageText",
+    );
+    expect(deliveries).toHaveLength(1);
   });
 
   it("keeps the transaction and queues the message when delivery throws", async () => {
@@ -1436,6 +1488,12 @@ git commit -m "feat: route the confirmation message through the outbox"
 - Modify: `src/application/record-recovery.ts`、`src/application/abandon-advance.ts`、`src/application/mutate-transaction.ts`
 - Modify: `src/telegram/handlers/advances.ts`、`src/telegram/handlers/transactions.ts`
 - Test: `tests/telegram/outbox-coverage.test.ts`（新）
+
+**另外要處理：`transactions.ts` 的退款確認路徑。** 該檔案有第二個 `confirmDraft` 呼叫
+（退款流程的確認鍵）。Task 5 讓 outbox 參數變成必填之後，它會寫入一列 outbox，但仍然
+自己 `editMessageText` —— runner 上線後同一則訊息會送兩次。照 Task 7 對 drafts.ts 的
+同一個原則處理：移除 handler 自己的 `editMessageText`，訊息一律由 runner 送出，否則
+「已送出」會有兩個真相來源。
 
 **Interfaces:**
 - Consumes: Task 5 建立的 `OutboxRequest<T>` 模式
@@ -1555,6 +1613,30 @@ describe("attention notifier", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("does not let a failed alert consume the throttle window", async () => {
+    // 節流的目的是不要洗版使用者；送失敗的通知沒到達使用者，不該吃掉那 10 分鐘。
+    // 少了這條，把 setSetting 移到 try 之前（每次嘗試都寫）四條測試全綠。
+    const { notify, api, advance } = harness();
+    api.sendMessage.mockRejectedValueOnce(new Error("network down"));
+    await notify(stuckMessage());
+
+    advance(60_000);
+    await notify(stuckMessage());
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("never puts financial content in the alert", async () => {
+    // 這則通知可能在管道半通不通時送出，用途是「去看 /status」而不是重述交易。
+    // 只用 toContain 檢查關鍵句的話，在文案後面加一個金額仍然全綠——審查時實測過。
+    const { notify, api } = harness();
+
+    await notify(stuckMessage());
+
+    const text = api.sendMessage.mock.calls[0]?.[1] as string;
+    expect(text).not.toMatch(/\d/);
+  });
+
   it("swallows its own failure instead of throwing", async () => {
     // 正在壞掉的就是 Telegram 這條管道，通知本來就可能送不出去。丟例外會讓
     // drainOnce 整批中斷，後面的列連試都沒試到。
@@ -1646,6 +1728,34 @@ describe("/status", () => {
 
     await expect(pendingCount(repository)).resolves.toBe(0);
     await expect(deliveredCount(repository)).resolves.toBe(1);
+    // attempts 必須歸零。既有的 sqlite-outbox 測試 seed 的列本來就是 0，分不出
+    // 「重設為 0」與「原封不動」——審查時把 UPDATE 裡的 attempts = 0 拿掉，整套仍全綠。
+    await expect(attemptsOf(repository, "stuck")).resolves.toBe(0);
+  });
+
+  it("prints the attempt count verbatim and nothing else on the error line", async () => {
+    // 這兩條是本 task 著墨最多的語意，卻也最容易被一個字元改掉：attempts 印成 attempts+1，
+    // 或在錯誤行後面接上訊息內容。審查時實測，兩種改法整套 446 條測試都不會紅。
+    const { bot, calls, repository } = harness();
+    await seedStuck(repository); // attempts: 4、text 內含「已入帳：午餐 120」
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const text = getText(calls.at(-1)) ?? "";
+    expect(text).toContain("已重試 4 次");
+    // 錯誤行只放 Telegram 自己的描述，不得夾帶金額、分類或原文。
+    expect(text).not.toContain("已入帳");
+    expect(text).not.toContain("120");
+  });
+
+  it("shows times in the configured timezone, not UTC", async () => {
+    // /status 的用途是判斷遞送有沒有卡住；差八小時的時間戳會讓使用者以為卡住了。
+    const { bot, calls, repository } = harness(); // 時區固定為 Asia/Taipei
+    await seedDelivered(repository, "2026-09-30T06:32:00.000Z");
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    expect(getText(calls.at(-1))).toContain("14:32");
   });
 
   it("hides the retry button when nothing is stuck", async () => {
@@ -1673,9 +1783,14 @@ Expected: FAIL，`/status` 未註冊
 最後成功遞送：14:32
 schema 版本：8
 
-⚠️ 確認交易 · 14:05 · 已重試 5 次
+⚠️ 確認交易 · 14:05 · 已重試 4 次
    Telegram 回應 403
 ```
+
+**「已重試 N 次」直接印 `attempts`，不要加一。** `markOutboxNeedsAttention` 不會動
+`attempts`（只有 `markOutboxFailed` 會），所以用盡上限而放棄的列停在 4：第一次送出不是
+重試，之後排了 4 次重試，總共送了 5 次。印 `attempts` 剛好就是「重試了幾次」。立刻放棄
+的列（403、訊息過長）`attempts` 是 0，讀起來也正確：沒有重試過。
 
 按鈕：有 `needs_attention` 才出現 `[重試全部]`；最後一列固定 `[關閉清單]`，callback
 `dismiss-status`，與其他清單指令一致。`outbox-retry` 呼叫 `retryOutboxNeedsAttention`
@@ -1729,11 +1844,26 @@ describe("pre-migration snapshot", () => {
 
     const snapshot = takePreMigrationSnapshot(database, directory, 8, new Date());
 
-    expect(snapshot).toMatch(/pre-migration\/8-.*\.sqlite$/);
+    expect(snapshot).toMatch(/pre-migration\/.*-8\.sqlite$/);
     // 快照本身必須是可用的資料庫，否則它不是備份只是檔案。
     const restored = openDatabase(snapshot ?? "");
     expect(restored.pragma("integrity_check", { simple: true })).toBe("ok");
     expect(restored.prepare("SELECT max(version) AS v FROM schema_migrations").get()).toEqual({ v: 7 });
+    restored.close();
+  });
+
+  it("captures data still sitting in the write-ahead log", () => {
+    // VACUUM INTO 存在的全部理由。少了這條，把它換成 copyFileSync 四條測試全綠——
+    // 審查時實測過——而複製檔案會漏掉尚未 checkpoint 的已提交資料。
+    const { directory, databasePath } = ledgerAtVersion(7);
+    const database = openDatabase(databasePath);
+    database.exec("CREATE TABLE wal_probe (id INTEGER PRIMARY KEY)");
+    database.prepare("INSERT INTO wal_probe (id) VALUES (1)").run();
+
+    const snapshot = takePreMigrationSnapshot(database, directory, 8, new Date());
+
+    const restored = openDatabase(snapshot ?? "");
+    expect(restored.prepare("SELECT count(*) AS total FROM wal_probe").get()).toEqual({ total: 1 });
     restored.close();
   });
 
@@ -1762,7 +1892,9 @@ describe("pre-migration snapshot", () => {
     // 讓 migration 失敗：先佔用它要建立的資料表名稱。
     database.exec("CREATE TABLE outbox_messages (nope TEXT)");
 
-    expect(() => migrate(database)).toThrow();
+    expect(() => {
+      migrate(database);
+    }).toThrow();
 
     expect(existsSync(snapshot ?? "")).toBe(true);
     expect(
@@ -1798,7 +1930,11 @@ export function takePreMigrationSnapshot(
   const folder = join(dataDirectory, "pre-migration");
   mkdirSync(folder, { recursive: true });
   const stamp = now.toISOString().replace(/[:.]/g, "-");
-  const destination = join(folder, `${String(targetVersion)}-${stamp}.sqlite`);
+  // 時間戳放在前面，版本放後面：ISO 時間戳是固定寬度，字典序天然等於時間序。
+  // 反過來（版本在前）的話，版本一進到兩位數，`10-…` 會排在 `9-…` 之前，而修剪是拿
+  // 排序後的最前面當「最舊」刪掉——結果是把最新、最有價值的那一份刪了，留下三份陳舊的。
+  // 這不是排序函式該修的事，而是不要讓可變寬度的前綴擋在固定寬度的時間戳前面。
+  const destination = join(folder, `${stamp}-${String(targetVersion)}.sqlite`);
   database.exec(`VACUUM INTO '${destination.replace(/'/g, "''")}'`);
   pruneSnapshots(folder, 3);
   return destination;
@@ -1978,7 +2114,7 @@ describe("/help", () => {
   it("registers the same list with Telegram so the / menu shows it", async () => {
     const { bot, calls } = harness();
 
-    await startBot(bot);
+    await registerCommandMenu(bot);
 
     const call = calls.find((item) => item.method === "setMyCommands");
     expect(call).toBeDefined();

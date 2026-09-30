@@ -264,16 +264,35 @@ export function registerDraftHandlers(bot: Bot, dependencies: LedgerBotDependenc
       });
       return;
     }
-    const transaction = await confirmDraft(
+    const chatId = String(context.chat?.id ?? "");
+    const targetMessageId = String(context.callbackQuery.message?.message_id ?? "");
+    // 代墊回收草稿（record-recovery.ts 產生）與一般交易草稿走的是同一顆「確認」鍵、
+    // 同一個 confirmDraft，差別只在於帳本變更的「原因」——這裡沒有另一條獨立的
+    // repository 寫入路徑可以區分，唯一看得出來的信號就是配置本身的 purpose。
+    const isRecovery = record.draft.allocations.some((item) => item.purpose === "advance_recovery");
+    await confirmDraft(
       dependencies.repository,
       draftId,
       dependencies.now().toISOString(),
       dependencies.generateId(),
+      {
+        messageId: dependencies.generateId(),
+        cause: isRecovery ? "recovery_recorded" : "transaction_confirmed",
+        // 在 repository 的 transaction 內被呼叫：transactionId 這時才存在。
+        render: (confirmed) => ({
+          chatId,
+          targetMessageId,
+          text: isRecovery
+            ? `已記錄代墊回收：${confirmed.amount.currency} ${confirmed.amount.amount}`
+            : `已入帳：${confirmed.amount.currency} ${confirmed.amount.amount}\n交易 ID：${confirmed.transactionId}`,
+        }),
+      },
     );
     await context.answerCallbackQuery({ text: "已確認" });
-    await context.editMessageText(
-      `已入帳：${transaction.amount.currency} ${transaction.amount.amount}\n交易 ID：${transaction.transactionId}`,
-    );
+    // 提交後立刻嘗試遞送，使用者體感與先前相同；失敗就留給背景迴圈補送。
+    // 這裡不直接 editMessageText：訊息一律由 runner 送出，否則「已送出」與
+    // outbox 狀態會有兩個真相來源，而且 runner 稍後還會再送一次。
+    await dependencies.outboxRunner.drainOnce();
   });
 
   const KEYWORDS_MESSAGE_KEY = "keywords_list_message";

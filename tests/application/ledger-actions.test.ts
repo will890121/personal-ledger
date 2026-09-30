@@ -5,6 +5,16 @@ import { listRecent } from "../../src/application/list-recent.js";
 import type { TransactionDraft } from "../../src/domain/ledger.js";
 import { FakeLedgerRepository } from "../support/fake-ledger-repository.js";
 
+// 測試不關心遞送內容，只需要滿足 confirmDraft 的必填 outbox 參數；messageId 逐次帶入
+// 不同值，避免同一個 fake repository 裡撞到相同的 messageId。
+function testOutbox(messageId: string) {
+  return {
+    messageId,
+    cause: "transaction_confirmed" as const,
+    render: () => ({ chatId: "1", text: "ok" }),
+  };
+}
+
 function makeDraft(index: number): TransactionDraft {
   const suffix = String(index);
   return {
@@ -33,8 +43,20 @@ describe("ledger actions", () => {
     const repository = new FakeLedgerRepository();
     await repository.saveDraft(makeDraft(1));
 
-    const first = await confirmDraft(repository, "draft-1", "2026-09-18T01:00:00.000Z", "audit-1");
-    const second = await confirmDraft(repository, "draft-1", "2026-09-18T01:01:00.000Z", "audit-2");
+    const first = await confirmDraft(
+      repository,
+      "draft-1",
+      "2026-09-18T01:00:00.000Z",
+      "audit-1",
+      testOutbox("outbox-first"),
+    );
+    const second = await confirmDraft(
+      repository,
+      "draft-1",
+      "2026-09-18T01:01:00.000Z",
+      "audit-2",
+      testOutbox("outbox-second"),
+    );
 
     expect(second).toEqual(first);
     expect(repository.transactions.size).toBe(1);
@@ -58,6 +80,7 @@ describe("ledger actions", () => {
         `draft-${String(index)}`,
         `2026-09-18T01:${String(index).padStart(2, "0")}:00.000Z`,
         `audit-${String(index)}`,
+        testOutbox(`outbox-${String(index)}`),
       );
     }
 

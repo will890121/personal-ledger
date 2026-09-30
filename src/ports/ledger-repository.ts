@@ -1,6 +1,7 @@
 import type { AdvanceRow, RecoveryRow } from "../domain/advance.js";
 import type { IncompleteDraft } from "../domain/draft.js";
 import type { ConfirmedTransaction, TransactionDraft } from "../domain/ledger.js";
+import type { OutboxCause, OutboxMessage, OutboxPayload } from "../domain/outbox.js";
 
 export interface InputEventInput {
   readonly eventId: string;
@@ -110,6 +111,21 @@ export interface PendingDraftSummary {
   readonly createdDate: string | null;
 }
 
+/** 帳本變更要連帶寫入的那一則訊息。`render` 在 repository 的 transaction 內被呼叫。 */
+export interface OutboxRequest<T> {
+  readonly messageId: string;
+  readonly cause: OutboxCause;
+  readonly render: (result: T) => OutboxPayload;
+}
+
+export interface OutboxSummary {
+  readonly pending: number;
+  readonly needsAttention: number;
+  readonly oldestPendingAt: string | null;
+  readonly lastDeliveredAt: string | null;
+  readonly stuck: readonly OutboxMessage[];
+}
+
 export interface LedgerRepository {
   recordInputEvent(input: InputEventInput): Promise<{
     created: boolean;
@@ -133,11 +149,18 @@ export interface LedgerRepository {
     draftId: string,
     confirmedAt: string,
     auditEventId: string,
+    outbox: OutboxRequest<ConfirmedTransaction>,
   ): Promise<ConfirmedTransaction>;
   cancelDraft(draftId: string): Promise<TransactionDraft>;
   getTransaction(ownerId: string, transactionId: string): Promise<ConfirmedTransaction | null>;
-  updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction>;
-  softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction>;
+  updateTransaction(
+    command: UpdateTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction>;
+  softDeleteTransaction(
+    command: DeleteTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction>;
   linkTransaction(command: LinkTransactionCommand): Promise<void>;
   unlinkTransaction(command: UnlinkTransactionCommand): Promise<void>;
   listAuditEvents(ownerId: string, transactionId: string): Promise<AuditEvent[]>;
@@ -145,4 +168,37 @@ export interface LedgerRepository {
   listAdvanceRows(ownerId: string): Promise<AdvanceRow[]>;
   listRecoveryRows(ownerId: string): Promise<RecoveryRow[]>;
   countRecoveriesForTransaction(ownerId: string, transactionId: string): Promise<number>;
+  claimDueOutbox(
+    ownerId: string,
+    now: string,
+    leaseUntil: string,
+    limit: number,
+  ): Promise<OutboxMessage[]>;
+  /**
+   * 三個 markOutbox* 都是 compare-and-set：只有當那一列的 lease_expires_at 仍然
+   * 等於 leaseToken（也就是 claim 當下寫進去的那個值）時才會寫入，回傳是否真的寫到。
+   * 過期的 worker 拿的是舊的 token，所以蓋不掉新 worker 的結果——訊息其實已經送到、
+   * /status 卻顯示「待處理 ⚠️」並發告警的那個競態，就是這樣擋掉的。
+   *
+   * 沒有 lease 的呼叫端（測試的資料佈置）傳 null：那同樣是一個真正的版本值，
+   * 對應「這一列現在沒有被任何人租走」。
+   */
+  markOutboxDelivered(
+    messageId: string,
+    deliveredAt: string,
+    leaseToken: string | null,
+  ): Promise<boolean>;
+  markOutboxFailed(
+    messageId: string,
+    nextAttemptAt: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean>;
+  markOutboxNeedsAttention(
+    messageId: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean>;
+  retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number>;
+  summarizeOutbox(ownerId: string): Promise<OutboxSummary>;
 }

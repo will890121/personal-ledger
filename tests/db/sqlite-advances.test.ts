@@ -5,6 +5,16 @@ import { migrate } from "../../src/db/migrate.js";
 import { SqliteLedgerRepository } from "../../src/db/sqlite-ledger-repository.js";
 import type { DeleteTransactionCommand } from "../../src/ports/ledger-repository.js";
 
+// 測試不關心遞送內容，只需要滿足 confirmDraft 的必填 outbox 參數；messageId 逐次帶入
+// 不同值，避免同一個資料庫裡違反 outbox_messages.message_id 的唯一鍵。
+function testOutbox(messageId: string) {
+  return {
+    messageId,
+    cause: "transaction_confirmed" as const,
+    render: () => ({ chatId: "1", text: "ok" }),
+  };
+}
+
 // 建立一筆已確認的代墊交易（含代墊配置），供代墊查詢與刪除保護測試使用。
 // 注意：confirmDraft 內部以 randomUUID() 產生 transactionId，無法指定為固定字串，
 // 因此回傳實際產生的 transactionId 供測試查詢使用。
@@ -55,6 +65,7 @@ async function setupAdvanceLedger(): Promise<{
     "advance-draft",
     "2026-09-24T01:01:00.000Z",
     "advance-audit",
+    testOutbox("outbox-advance"),
   );
 
   return {
@@ -106,6 +117,7 @@ async function setupAdvanceLedgerWithRecovery(recoveryAmount: string): Promise<{
     "recovery-draft",
     "2026-09-24T02:01:00.000Z",
     "recovery-audit",
+    testOutbox("outbox-recovery"),
   );
 
   const command: DeleteTransactionCommand = {
@@ -133,14 +145,17 @@ async function setupAdvanceLedgerWithDeletedRecovery(recoveryAmount: string): Pr
     await setupAdvanceLedgerWithRecovery(recoveryAmount);
 
   const recovery = await repository.getTransaction("owner-1", recoveryTransactionId);
-  await repository.softDeleteTransaction({
-    ownerId: "owner-1",
-    transactionId: recoveryTransactionId,
-    sourceEventId: "recovery-event",
-    auditEventId: "recovery-delete-audit",
-    expectedUpdatedAt: recovery?.updatedAt ?? "",
-    changedAt: "2026-09-24T04:00:00.000Z",
-  });
+  await repository.softDeleteTransaction(
+    {
+      ownerId: "owner-1",
+      transactionId: recoveryTransactionId,
+      sourceEventId: "recovery-event",
+      auditEventId: "recovery-delete-audit",
+      expectedUpdatedAt: recovery?.updatedAt ?? "",
+      changedAt: "2026-09-24T04:00:00.000Z",
+    },
+    testOutbox("outbox-recovery-delete"),
+  );
 
   return { repository };
 }
@@ -182,7 +197,9 @@ describe("advance queries", () => {
     // 這與既有的 tests/db/sqlite-ledger-repository.test.ts（見 "stale transaction update" /
     // "transaction not found for owner" 案例）採用相同的同步 throw 斷言慣例，
     // 而非 `await expect(...).rejects.toThrow(...)`。
-    expect(() => repository.softDeleteTransaction(command)).toThrow("advance still has recoveries");
+    expect(() =>
+      repository.softDeleteTransaction(command, testOutbox("outbox-blocked-delete")),
+    ).toThrow("advance still has recoveries");
   });
 
   it("counts recoveries pointing at a transaction", async () => {

@@ -1,9 +1,10 @@
-.env
 .DS_Store
+.env
+.pnpm-store/
+.superpowers/
+.worktrees/
 backups/
 coverage/
 data/
 dist/
 node_modules/
-.pnpm-store/
-.worktrees/

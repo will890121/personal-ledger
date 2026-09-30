@@ -9,6 +9,12 @@ import {
   type ConfirmedTransaction,
   type TransactionDraft,
 } from "../domain/ledger.js";
+import {
+  OutboxCauseSchema,
+  type OutboxCause,
+  type OutboxMessage,
+  type OutboxPayload,
+} from "../domain/outbox.js";
 import type {
   AuditAction,
   AuditEvent,
@@ -20,6 +26,8 @@ import type {
   InputEventInput,
   LedgerRepository,
   LinkTransactionCommand,
+  OutboxRequest,
+  OutboxSummary,
   PendingDraftSummary,
   PendingQuery,
   PendingStatus,
@@ -109,6 +117,35 @@ interface AuditRow {
   before_json: string | null;
   after_json: string | null;
   created_at: string;
+}
+interface OutboxRow {
+  message_id: string;
+  owner_id: string;
+  cause: string;
+  chat_id: string;
+  target_message_id: string | null;
+  text: string;
+  reply_markup: string | null;
+  status: string;
+  attempts: number;
+  next_attempt_at: string;
+  last_error: string | null;
+}
+
+function toOutboxMessage(row: OutboxRow): OutboxMessage {
+  return {
+    messageId: row.message_id,
+    ownerId: row.owner_id,
+    cause: OutboxCauseSchema.parse(row.cause),
+    chatId: row.chat_id,
+    ...(row.target_message_id ? { targetMessageId: row.target_message_id } : {}),
+    text: row.text,
+    ...(row.reply_markup ? { replyMarkup: row.reply_markup } : {}),
+    status: row.status as OutboxMessage["status"],
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
 }
 
 export class SqliteLedgerRepository implements LedgerRepository {
@@ -360,6 +397,7 @@ export class SqliteLedgerRepository implements LedgerRepository {
     draftId: string,
     confirmedAt: string,
     auditEventId: string,
+    outbox: OutboxRequest<ConfirmedTransaction>,
   ): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
       const draft = this.getDraftSync(draftId);
@@ -432,6 +470,13 @@ export class SqliteLedgerRepository implements LedgerRepository {
           changedAt: confirmedAt,
         });
       }
+      this.enqueueOutbox(
+        outbox.messageId,
+        draft.ownerId,
+        outbox.cause,
+        outbox.render(confirmed),
+        confirmedAt,
+      );
       return confirmed;
     });
     return Promise.resolve(execute.immediate());
@@ -455,7 +500,10 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return Promise.resolve(this.getTransactionSync(ownerId, transactionId));
   }
 
-  public updateTransaction(command: UpdateTransactionCommand): Promise<ConfirmedTransaction> {
+  public updateTransaction(
+    command: UpdateTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
       // 配置採「先全刪再重建」的方式更新，但 allocations.recovers_allocation_id 是指向
       // allocations 自身的外鍵（migration 0005），回收配置會指著被刪除的代墊配置。
@@ -522,12 +570,24 @@ export class SqliteLedgerRepository implements LedgerRepository {
         after,
         command.changedAt,
       );
+      // 帳本變更（這筆交易被改了）與告知使用者的訊息在同一個 transaction 內提交，
+      // 兩者不可能只有一半——與 confirmDraft 同一個道理。
+      this.enqueueOutbox(
+        outbox.messageId,
+        command.ownerId,
+        outbox.cause,
+        outbox.render(after),
+        command.changedAt,
+      );
       return after;
     });
     return Promise.resolve(execute.immediate());
   }
 
-  public softDeleteTransaction(command: DeleteTransactionCommand): Promise<ConfirmedTransaction> {
+  public softDeleteTransaction(
+    command: DeleteTransactionCommand,
+    outbox: OutboxRequest<ConfirmedTransaction>,
+  ): Promise<ConfirmedTransaction> {
     const execute = this.database.transaction(() => {
       const before = this.requireMutable(command.ownerId, command.transactionId);
       if (before.updatedAt !== command.expectedUpdatedAt)
@@ -565,6 +625,13 @@ export class SqliteLedgerRepository implements LedgerRepository {
         "transaction_deleted",
         before,
         after,
+        command.changedAt,
+      );
+      this.enqueueOutbox(
+        outbox.messageId,
+        command.ownerId,
+        outbox.cause,
+        outbox.render(after),
         command.changedAt,
       );
       return after;
@@ -727,6 +794,156 @@ export class SqliteLedgerRepository implements LedgerRepository {
       )
       .get(ownerId, transactionId) as { total: number };
     return Promise.resolve(row.total);
+  }
+
+  // 時間一律是 toISOString()：SQLite 做字串比較，格式混用（有的帶毫秒、有的不帶）
+  // 會讓排序錯亂，排程於是永遠不到期或立刻到期。
+  public claimDueOutbox(
+    ownerId: string,
+    now: string,
+    leaseUntil: string,
+    limit: number,
+  ): Promise<OutboxMessage[]> {
+    const claim = this.database.transaction(() => {
+      const rows = this.database
+        .prepare(
+          `SELECT * FROM outbox_messages
+           WHERE owner_id = ? AND status = 'pending' AND next_attempt_at <= ?
+             AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+           ORDER BY next_attempt_at LIMIT ?`,
+        )
+        .all(ownerId, now, now, limit) as OutboxRow[];
+      const lease = this.database.prepare(
+        "UPDATE outbox_messages SET lease_expires_at = ? WHERE message_id = ?",
+      );
+      for (const row of rows) lease.run(leaseUntil, row.message_id);
+      return rows.map((row) => toOutboxMessage(row));
+    });
+    return Promise.resolve(claim.immediate());
+  }
+
+  // 三個 markOutbox* 共用的樂觀鎖：`lease_expires_at IS ?` 拿 claim 當下寫進去的
+  // 那個值當版本值（同一批共用、不同批至少差一個 drain 週期，足以區辨），不需要
+  // 新的欄位、也就不需要新的 migration。用 IS 而不是 =，null 才會被當成一個真正的
+  // 版本值（「沒有人租走這一列」），而不是永遠比不中。
+  // markOutboxDelivered 會把 lease_expires_at 清成 NULL，所以遲到的 worker 之後
+  // 一定對不上——那正是我們要的。
+  public markOutboxDelivered(
+    messageId: string,
+    deliveredAt: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const result = this.database
+      .prepare(
+        `UPDATE outbox_messages SET status = 'delivered', delivered_at = ?, lease_expires_at = NULL
+         WHERE message_id = ? AND lease_expires_at IS ?`,
+      )
+      .run(deliveredAt, messageId, leaseToken);
+    return Promise.resolve(result.changes > 0);
+  }
+
+  public markOutboxFailed(
+    messageId: string,
+    nextAttemptAt: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
+    const result = this.database
+      .prepare(
+        `UPDATE outbox_messages
+         SET attempts = attempts + 1, next_attempt_at = ?, last_error = ?, lease_expires_at = NULL
+         WHERE message_id = ? AND lease_expires_at IS ?`,
+      )
+      .run(nextAttemptAt, lastError, messageId, leaseToken);
+    return Promise.resolve(result.changes > 0);
+  }
+
+  public markOutboxNeedsAttention(
+    messageId: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const result = this.database
+      .prepare(
+        `UPDATE outbox_messages SET status = 'needs_attention', last_error = ?, lease_expires_at = NULL
+         WHERE message_id = ? AND lease_expires_at IS ?`,
+      )
+      .run(lastError, messageId, leaseToken);
+    return Promise.resolve(result.changes > 0);
+  }
+
+  public retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number> {
+    const result = this.database
+      .prepare(
+        `UPDATE outbox_messages
+         SET status = 'pending', attempts = 0, next_attempt_at = ?, lease_expires_at = NULL
+         WHERE owner_id = ? AND status = 'needs_attention'`,
+      )
+      .run(nextAttemptAt, ownerId);
+    return Promise.resolve(result.changes);
+  }
+
+  public summarizeOutbox(ownerId: string): Promise<OutboxSummary> {
+    const counts = this.database
+      .prepare(
+        `SELECT
+           sum(status = 'pending') AS pending,
+           sum(status = 'needs_attention') AS needs_attention,
+           -- 故意用 created_at，不是 next_attempt_at：/status 這裡要回答的是「卡多久了」，
+           -- 也就是這則訊息何時被排進佇列，不是它下一次何時到期。已經失敗過的訊息
+           -- next_attempt_at 會被往後挪到未來（退避），若拿它當「最舊」的依據，
+           -- 對使用者顯示的就是負的等待分鐘數——看起來像還沒到期，而不是卡住很久了。
+           min(CASE WHEN status = 'pending' THEN created_at END) AS oldest_pending_at,
+           max(delivered_at) AS last_delivered_at
+         FROM outbox_messages WHERE owner_id = ?`,
+      )
+      .get(ownerId) as {
+      pending: number | null;
+      needs_attention: number | null;
+      oldest_pending_at: string | null;
+      last_delivered_at: string | null;
+    };
+    const stuck = this.database
+      .prepare(
+        "SELECT * FROM outbox_messages WHERE owner_id = ? AND status = 'needs_attention' ORDER BY created_at LIMIT 5",
+      )
+      .all(ownerId) as OutboxRow[];
+    return Promise.resolve({
+      pending: counts.pending ?? 0,
+      needsAttention: counts.needs_attention ?? 0,
+      oldestPendingAt: counts.oldest_pending_at,
+      lastDeliveredAt: counts.last_delivered_at,
+      stuck: stuck.map((row) => toOutboxMessage(row)),
+    });
+  }
+
+  /** 只在帳本變更的 transaction 內呼叫，兩者因此不可能只有一半。 */
+  private enqueueOutbox(
+    messageId: string,
+    ownerId: string,
+    cause: OutboxCause,
+    payload: OutboxPayload,
+    now: string,
+  ): void {
+    this.database
+      .prepare(
+        `INSERT INTO outbox_messages
+           (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
+            status, attempts, next_attempt_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+      )
+      .run(
+        messageId,
+        ownerId,
+        cause,
+        payload.chatId,
+        payload.targetMessageId ?? null,
+        payload.text,
+        payload.replyMarkup ?? null,
+        now,
+        now,
+      );
   }
 
   private getDraftSync(draftId: string): TransactionDraft | null {
