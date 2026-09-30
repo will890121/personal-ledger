@@ -85,7 +85,7 @@ async function seedConfirmedExpense(
     "seed-audit",
     testOutbox("outbox-seed", "transaction_confirmed"),
   );
-  await repository.markOutboxDelivered("outbox-seed", "2026-09-30T01:01:00.000Z");
+  await repository.markOutboxDelivered("outbox-seed", "2026-09-30T01:01:00.000Z", null);
   return confirmed;
 }
 
@@ -135,7 +135,7 @@ async function seedConfirmedAdvance(
     "advance-audit",
     testOutbox("outbox-advance-seed", "transaction_confirmed"),
   );
-  await repository.markOutboxDelivered("outbox-advance-seed", "2026-09-10T01:01:00.000Z");
+  await repository.markOutboxDelivered("outbox-advance-seed", "2026-09-10T01:01:00.000Z", null);
   return advance;
 }
 

@@ -822,38 +822,55 @@ export class SqliteLedgerRepository implements LedgerRepository {
     return Promise.resolve(claim.immediate());
   }
 
-  public markOutboxDelivered(messageId: string, deliveredAt: string): Promise<void> {
-    this.database
+  // 三個 markOutbox* 共用的樂觀鎖：`lease_expires_at IS ?` 拿 claim 當下寫進去的
+  // 那個值當版本值（同一批共用、不同批至少差一個 drain 週期，足以區辨），不需要
+  // 新的欄位、也就不需要新的 migration。用 IS 而不是 =，null 才會被當成一個真正的
+  // 版本值（「沒有人租走這一列」），而不是永遠比不中。
+  // markOutboxDelivered 會把 lease_expires_at 清成 NULL，所以遲到的 worker 之後
+  // 一定對不上——那正是我們要的。
+  public markOutboxDelivered(
+    messageId: string,
+    deliveredAt: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const result = this.database
       .prepare(
-        "UPDATE outbox_messages SET status = 'delivered', delivered_at = ?, lease_expires_at = NULL WHERE message_id = ?",
+        `UPDATE outbox_messages SET status = 'delivered', delivered_at = ?, lease_expires_at = NULL
+         WHERE message_id = ? AND lease_expires_at IS ?`,
       )
-      .run(deliveredAt, messageId);
-    return Promise.resolve();
+      .run(deliveredAt, messageId, leaseToken);
+    return Promise.resolve(result.changes > 0);
   }
 
   public markOutboxFailed(
     messageId: string,
     nextAttemptAt: string,
     lastError: string,
-  ): Promise<void> {
+    leaseToken: string | null,
+  ): Promise<boolean> {
     // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
-    this.database
+    const result = this.database
       .prepare(
         `UPDATE outbox_messages
          SET attempts = attempts + 1, next_attempt_at = ?, last_error = ?, lease_expires_at = NULL
-         WHERE message_id = ?`,
+         WHERE message_id = ? AND lease_expires_at IS ?`,
       )
-      .run(nextAttemptAt, lastError, messageId);
-    return Promise.resolve();
+      .run(nextAttemptAt, lastError, messageId, leaseToken);
+    return Promise.resolve(result.changes > 0);
   }
 
-  public markOutboxNeedsAttention(messageId: string, lastError: string): Promise<void> {
-    this.database
+  public markOutboxNeedsAttention(
+    messageId: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const result = this.database
       .prepare(
-        "UPDATE outbox_messages SET status = 'needs_attention', last_error = ?, lease_expires_at = NULL WHERE message_id = ?",
+        `UPDATE outbox_messages SET status = 'needs_attention', last_error = ?, lease_expires_at = NULL
+         WHERE message_id = ? AND lease_expires_at IS ?`,
       )
-      .run(lastError, messageId);
-    return Promise.resolve();
+      .run(lastError, messageId, leaseToken);
+    return Promise.resolve(result.changes > 0);
   }
 
   public retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number> {

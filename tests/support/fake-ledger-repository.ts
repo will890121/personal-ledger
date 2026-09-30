@@ -150,40 +150,55 @@ export class FakeLedgerRepository implements LedgerRepository {
     return Promise.resolve(due.map((row) => toOutboxMessage(row)));
   }
 
-  public markOutboxDelivered(messageId: string, deliveredAt: string): Promise<void> {
+  // 樂觀鎖，語意必須與 SqliteLedgerRepository 的 `lease_expires_at IS ?` 逐字對齊：
+  // 只有 leaseExpiresAt 仍等於 claim 當下寫入的那個值時才寫得進去，null 是一個
+  // 真正的版本值（「沒有人租走這一列」），不是「不檢查」。
+  private casOutbox(messageId: string, leaseToken: string | null): FakeOutboxMessage | undefined {
     const row = this.outboxMessages.get(messageId);
-    if (row) {
-      row.status = "delivered";
-      row.deliveredAt = deliveredAt;
-      row.leaseExpiresAt = null;
-    }
-    return Promise.resolve();
+    if (!row || row.leaseExpiresAt !== leaseToken) return undefined;
+    return row;
+  }
+
+  public markOutboxDelivered(
+    messageId: string,
+    deliveredAt: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const row = this.casOutbox(messageId, leaseToken);
+    if (!row) return Promise.resolve(false);
+    row.status = "delivered";
+    row.deliveredAt = deliveredAt;
+    row.leaseExpiresAt = null;
+    return Promise.resolve(true);
   }
 
   public markOutboxFailed(
     messageId: string,
     nextAttemptAt: string,
     lastError: string,
-  ): Promise<void> {
-    const row = this.outboxMessages.get(messageId);
-    if (row) {
-      // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
-      row.attempts += 1;
-      row.nextAttemptAt = nextAttemptAt;
-      row.lastError = lastError;
-      row.leaseExpiresAt = null;
-    }
-    return Promise.resolve();
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const row = this.casOutbox(messageId, leaseToken);
+    if (!row) return Promise.resolve(false);
+    // lease 必須一起釋放，否則下一次重試要等到 lease 自然過期。
+    row.attempts += 1;
+    row.nextAttemptAt = nextAttemptAt;
+    row.lastError = lastError;
+    row.leaseExpiresAt = null;
+    return Promise.resolve(true);
   }
 
-  public markOutboxNeedsAttention(messageId: string, lastError: string): Promise<void> {
-    const row = this.outboxMessages.get(messageId);
-    if (row) {
-      row.status = "needs_attention";
-      row.lastError = lastError;
-      row.leaseExpiresAt = null;
-    }
-    return Promise.resolve();
+  public markOutboxNeedsAttention(
+    messageId: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    const row = this.casOutbox(messageId, leaseToken);
+    if (!row) return Promise.resolve(false);
+    row.status = "needs_attention";
+    row.lastError = lastError;
+    row.leaseExpiresAt = null;
+    return Promise.resolve(true);
   }
 
   public retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number> {

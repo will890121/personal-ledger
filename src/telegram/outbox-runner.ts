@@ -103,23 +103,39 @@ async function sendOrEdit(
   await deps.api.sendMessage(message.chatId, message.text, options, signal);
 }
 
+/**
+ * 三個 markOutbox* 都是 compare-and-set，寫不進去時回傳 false。這不是錯誤：代表
+ * 這一列在我們送出的期間 lease 已經過期、被另一個 worker 接手並且已經有了結果
+ * （markOutboxDelivered 會把 lease_expires_at 清成 NULL，所以遲到的 worker 之後
+ * 一定對不上）。記一行然後正常繼續；硬蓋回去才是真正的災難——訊息其實已經送到，
+ * /status 卻會顯示「待處理 1 筆 ⚠️」並發告警，按「重試全部」還會真的再送一次。
+ */
+async function recordOutcome(messageId: string, write: Promise<boolean>): Promise<void> {
+  if (await write) return;
+  logger.info("outbox row already had a newer result; not overwriting it", { messageId });
+}
+
 async function handleDeliveryFailure(
   message: OutboxMessage,
   deps: OutboxRunnerDependencies,
   error: unknown,
   isResend: boolean,
+  leaseToken: string,
 ): Promise<DeliveryResult> {
   const outcome = classifyDeliveryError(error);
 
   if (outcome.kind === "already-delivered") {
-    await deps.repository.markOutboxDelivered(message.messageId, deps.now().toISOString());
+    await recordOutcome(
+      message.messageId,
+      deps.repository.markOutboxDelivered(message.messageId, deps.now().toISOString(), leaseToken),
+    );
     return "delivered";
   }
 
   if (outcome.kind === "resend-as-new" && !isResend) {
     // 目標訊息不見了：改送新訊息，這次失敗不計入 attempts；
     // 再失敗（isResend = true）才落入下面一般的重試／放棄規則。
-    return attemptDelivery(message, deps, true);
+    return attemptDelivery(message, deps, true, leaseToken);
   }
 
   if (outcome.kind === "give-up" || outcome.kind === "resend-as-new") {
@@ -127,7 +143,14 @@ async function handleDeliveryFailure(
     // sendMessage 不是 editMessageText——比照 give-up 處理，避免無窮遞迴。
     // 這個分支目前無法被觸發：故意留著的縱深防禦，不是漏改的死碼；不用花時間找
     // 一條會走到這裡的路徑。
-    await deps.repository.markOutboxNeedsAttention(message.messageId, describeDeliveryError(error));
+    await recordOutcome(
+      message.messageId,
+      deps.repository.markOutboxNeedsAttention(
+        message.messageId,
+        describeDeliveryError(error),
+        leaseToken,
+      ),
+    );
     await deps.onNeedsAttention(message);
     return "needs_attention";
   }
@@ -135,17 +158,28 @@ async function handleDeliveryFailure(
   // outcome.kind === "retry"
   const attempts = message.attempts + 1;
   if (attempts >= MAX_ATTEMPTS) {
-    await deps.repository.markOutboxNeedsAttention(message.messageId, describeDeliveryError(error));
+    await recordOutcome(
+      message.messageId,
+      deps.repository.markOutboxNeedsAttention(
+        message.messageId,
+        describeDeliveryError(error),
+        leaseToken,
+      ),
+    );
     await deps.onNeedsAttention(message);
     return "needs_attention";
   }
 
   const delayMs = outcome.retryAfterMs ?? backoffMs(attempts);
   const nextAttemptAt = new Date(deps.now().getTime() + delayMs).toISOString();
-  await deps.repository.markOutboxFailed(
+  await recordOutcome(
     message.messageId,
-    nextAttemptAt,
-    describeDeliveryError(error),
+    deps.repository.markOutboxFailed(
+      message.messageId,
+      nextAttemptAt,
+      describeDeliveryError(error),
+      leaseToken,
+    ),
   );
   return "retrying";
 }
@@ -154,21 +188,30 @@ async function attemptDelivery(
   message: OutboxMessage,
   deps: OutboxRunnerDependencies,
   isResend: boolean,
+  leaseToken: string,
 ): Promise<DeliveryResult> {
   try {
     await sendOrEdit(message, deps, isResend);
   } catch (error) {
-    return handleDeliveryFailure(message, deps, error, isResend);
+    return handleDeliveryFailure(message, deps, error, isResend, leaseToken);
   }
-  await deps.repository.markOutboxDelivered(message.messageId, deps.now().toISOString());
+  await recordOutcome(
+    message.messageId,
+    deps.repository.markOutboxDelivered(message.messageId, deps.now().toISOString(), leaseToken),
+  );
   return "delivered";
 }
 
+/**
+ * leaseToken 就是 claim 這一列時寫進 lease_expires_at 的那個值：這一次遞送的
+ * 「我還是這一列的擁有者嗎」憑證。呼叫端必須把 claim 當下的值原封不動傳進來。
+ */
 export function deliverOutboxMessage(
   message: OutboxMessage,
   deps: OutboxRunnerDependencies,
+  leaseToken: string,
 ): Promise<DeliveryResult> {
-  return attemptDelivery(message, deps, false);
+  return attemptDelivery(message, deps, false, leaseToken);
 }
 
 export interface OutboxRunner {
@@ -193,7 +236,8 @@ export function createOutboxRunner(deps: OutboxRunnerDependencies): OutboxRunner
       BATCH,
     );
     for (const message of claimed) {
-      await deliverOutboxMessage(message, deps);
+      // leaseUntil 是這一批共用的 lease 值，也就是 markOutbox* 的樂觀鎖版本值。
+      await deliverOutboxMessage(message, deps, leaseUntil);
     }
   }
 

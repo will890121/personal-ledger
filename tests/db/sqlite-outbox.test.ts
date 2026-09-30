@@ -54,6 +54,64 @@ describe("outbox storage", () => {
     expect(reclaimed.map((item) => item.messageId)).toEqual(["orphan"]);
   });
 
+  it("does not let a stale worker overwrite the result of the worker that took over", async () => {
+    // I2：worker A claim 之後卡住 → lease 過期 → worker B 重新 claim 並送達 →
+    // A 這時才以 403 失敗。少了樂觀鎖，A 會把這一列改回 needs_attention：訊息其實
+    // 已經送到，/status 卻顯示「待處理 1 筆 ⚠️」還發告警，按「重試全部」會真的再送
+    // 一次——一個純粹的競態把「至少一次」變成「使用者被騙去製造重複」。
+    seed("racy", NOW);
+    const leaseA = "2026-09-30T09:00:30.000Z";
+    const leaseB = "2026-09-30T09:01:30.000Z";
+    const claimedByA = await repository.claimDueOutbox("owner-1", NOW, leaseA, 10);
+    expect(claimedByA.map((item) => item.messageId)).toEqual(["racy"]);
+
+    // A 的 lease 過期，B 重新撈到同一列並送達。
+    const afterLeaseA = "2026-09-30T09:00:31.000Z";
+    const claimedByB = await repository.claimDueOutbox("owner-1", afterLeaseA, leaseB, 10);
+    expect(claimedByB.map((item) => item.messageId)).toEqual(["racy"]);
+    await expect(repository.markOutboxDelivered("racy", LATER, leaseB)).resolves.toBe(true);
+
+    // A 到現在才失敗，手上拿的是過期的 lease 值：兩種寫入都必須被擋掉。
+    await expect(
+      repository.markOutboxNeedsAttention("racy", "Forbidden: blocked", leaseA),
+    ).resolves.toBe(false);
+    await expect(repository.markOutboxFailed("racy", LATER, "Bad Gateway", leaseA)).resolves.toBe(
+      false,
+    );
+
+    expect(
+      database
+        .prepare(
+          "SELECT status, attempts, last_error FROM outbox_messages WHERE message_id = 'racy'",
+        )
+        .get(),
+    ).toEqual({ status: "delivered", attempts: 0, last_error: null });
+  });
+
+  it("does not let a stale worker resurrect a row the new worker gave up on", async () => {
+    // 同一個競態的反向：A 卡住、lease 過期、B 放棄並標 needs_attention（使用者已經
+    // 收到告警），A 這才回報成功。少了樂觀鎖，這一列會被悄悄標成 delivered，
+    // /status 從此看不到它，那則告警變成無從追查的孤兒。
+    seed("racy", NOW);
+    const leaseA = "2026-09-30T09:00:30.000Z";
+    const leaseB = "2026-09-30T09:01:30.000Z";
+    await repository.claimDueOutbox("owner-1", NOW, leaseA, 10);
+    await repository.claimDueOutbox("owner-1", "2026-09-30T09:00:31.000Z", leaseB, 10);
+    await expect(repository.markOutboxNeedsAttention("racy", "Forbidden", leaseB)).resolves.toBe(
+      true,
+    );
+
+    await expect(repository.markOutboxDelivered("racy", LATER, leaseA)).resolves.toBe(false);
+
+    expect(
+      database
+        .prepare(
+          "SELECT status, delivered_at, last_error FROM outbox_messages WHERE message_id = 'racy'",
+        )
+        .get(),
+    ).toEqual({ status: "needs_attention", delivered_at: null, last_error: "Forbidden" });
+  });
+
   it("round-trips the reply markup through JSON", async () => {
     // 按鈕壞掉在手動驗收之前沒有人會發現。
     const markup = JSON.stringify({
@@ -73,7 +131,7 @@ describe("outbox storage", () => {
     seed("failing", NOW);
     await repository.claimDueOutbox("owner-1", NOW, LATER, 10);
 
-    await repository.markOutboxFailed("failing", LATER, "Bad Gateway");
+    await repository.markOutboxFailed("failing", LATER, "Bad Gateway", LATER);
 
     const row = database
       .prepare(
@@ -115,9 +173,10 @@ describe("outbox storage", () => {
   it("summarises what /status needs", async () => {
     seed("waiting", NOW);
     seed("done", NOW);
-    await repository.markOutboxDelivered("done", LATER);
+    // 這一列沒有被 claim 過，lease 是 NULL——CAS 的版本值就是 null。
+    await repository.markOutboxDelivered("done", LATER, null);
     seed("stuck", NOW);
-    await repository.markOutboxNeedsAttention("stuck", "Forbidden");
+    await repository.markOutboxNeedsAttention("stuck", "Forbidden", null);
 
     await expect(repository.summarizeOutbox("owner-1")).resolves.toMatchObject({
       pending: 1,

@@ -174,9 +174,31 @@ export interface LedgerRepository {
     leaseUntil: string,
     limit: number,
   ): Promise<OutboxMessage[]>;
-  markOutboxDelivered(messageId: string, deliveredAt: string): Promise<void>;
-  markOutboxFailed(messageId: string, nextAttemptAt: string, lastError: string): Promise<void>;
-  markOutboxNeedsAttention(messageId: string, lastError: string): Promise<void>;
+  /**
+   * 三個 markOutbox* 都是 compare-and-set：只有當那一列的 lease_expires_at 仍然
+   * 等於 leaseToken（也就是 claim 當下寫進去的那個值）時才會寫入，回傳是否真的寫到。
+   * 過期的 worker 拿的是舊的 token，所以蓋不掉新 worker 的結果——訊息其實已經送到、
+   * /status 卻顯示「待處理 ⚠️」並發告警的那個競態，就是這樣擋掉的。
+   *
+   * 沒有 lease 的呼叫端（測試的資料佈置）傳 null：那同樣是一個真正的版本值，
+   * 對應「這一列現在沒有被任何人租走」。
+   */
+  markOutboxDelivered(
+    messageId: string,
+    deliveredAt: string,
+    leaseToken: string | null,
+  ): Promise<boolean>;
+  markOutboxFailed(
+    messageId: string,
+    nextAttemptAt: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean>;
+  markOutboxNeedsAttention(
+    messageId: string,
+    lastError: string,
+    leaseToken: string | null,
+  ): Promise<boolean>;
   retryOutboxNeedsAttention(ownerId: string, nextAttemptAt: string): Promise<number>;
   summarizeOutbox(ownerId: string): Promise<OutboxSummary>;
 }

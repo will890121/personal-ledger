@@ -7,8 +7,9 @@ const NOW = "2026-09-30T09:00:00.000Z";
 
 // 這個檔案只測 FakeLedgerRepository 的 outbox 語意是否與 SqliteLedgerRepository 一致
 // （見 tests/db/sqlite-outbox.test.ts）。本專案曾被測試替身與真實實作漂移咬過兩次，
-// 這裡把三個最容易漂移的行為釘死：lease 未過期就擋住重新取得、markOutboxFailed
-// 清空 lease 並把 attempts 加一、retryOutboxNeedsAttention 把 attempts 歸零。
+// 這裡把四個最容易漂移的行為釘死：lease 未過期就擋住重新取得、markOutboxFailed
+// 清空 lease 並把 attempts 加一、retryOutboxNeedsAttention 把 attempts 歸零、
+// 三個 markOutbox* 的 lease 樂觀鎖（對應真實 SQL 的 `lease_expires_at IS ?`）。
 describe("FakeLedgerRepository outbox semantics", () => {
   it("blocks re-claiming while the lease has not expired", async () => {
     const repository = new FakeLedgerRepository();
@@ -43,7 +44,7 @@ describe("FakeLedgerRepository outbox semantics", () => {
     });
     await repository.claimDueOutbox("owner-1", NOW, LATER, 10);
 
-    await repository.markOutboxFailed("failing", LATER, "Bad Gateway");
+    await repository.markOutboxFailed("failing", LATER, "Bad Gateway", LATER);
 
     const row = repository.outboxMessages.get("failing");
     expect(row?.attempts).toBe(1);
@@ -67,12 +68,49 @@ describe("FakeLedgerRepository outbox semantics", () => {
       nextAttemptAt: NOW,
       attempts: 4,
     });
-    await repository.markOutboxNeedsAttention("stuck", "Forbidden");
+    await repository.markOutboxNeedsAttention("stuck", "Forbidden", null);
 
     await expect(repository.retryOutboxNeedsAttention("owner-1", LATER)).resolves.toBe(1);
 
     const row = repository.outboxMessages.get("stuck");
     expect(row).toMatchObject({ status: "pending", attempts: 0, nextAttemptAt: LATER });
+  });
+
+  it("refuses a mark whose lease token is no longer the row's", async () => {
+    // 與 SqliteLedgerRepository 的 `lease_expires_at IS ?` 逐字對齊：過期的 worker
+    // 蓋不掉接手者的結果，而 null 是一個真正的版本值（「沒有人租走這一列」），
+    // 不是「不檢查」。這兩條語意只要有一條漂掉，runner 的並發測試就會在替身上
+    // 看起來正常、在真的 SQLite 上出錯。
+    const repository = new FakeLedgerRepository();
+    repository.seedOutboxMessage({
+      messageId: "racy",
+      ownerId: "owner-1",
+      cause: "transaction_confirmed",
+      chatId: "55",
+      text: "已入帳",
+      nextAttemptAt: NOW,
+    });
+    const staleLease = "2026-09-30T09:00:30.000Z";
+    await repository.claimDueOutbox("owner-1", NOW, staleLease, 10);
+    await repository.claimDueOutbox("owner-1", "2026-09-30T09:00:31.000Z", LATER, 10);
+
+    // 接手的 worker（lease = LATER）寫得進去；過期的那個（lease = staleLease）寫不進去。
+    await expect(repository.markOutboxDelivered("racy", LATER, LATER)).resolves.toBe(true);
+    await expect(
+      repository.markOutboxNeedsAttention("racy", "Forbidden", staleLease),
+    ).resolves.toBe(false);
+    await expect(
+      repository.markOutboxFailed("racy", LATER, "Bad Gateway", staleLease),
+    ).resolves.toBe(false);
+    expect(repository.outboxMessages.get("racy")).toMatchObject({
+      status: "delivered",
+      attempts: 0,
+    });
+
+    // 沒有被租走的列，null 才是對得上的版本值。
+    await expect(repository.markOutboxNeedsAttention("racy", "Forbidden", null)).resolves.toBe(
+      true,
+    );
   });
 
   it("reports oldestPendingAt as when the message was queued, not when it is next due", async () => {

@@ -21,7 +21,7 @@ async function seedStuck(repository: FakeLedgerRepository): Promise<void> {
     nextAttemptAt: "2026-09-18T00:55:00.000Z",
     attempts: 4,
   });
-  await repository.markOutboxNeedsAttention("stuck", "Bad Gateway");
+  await repository.markOutboxNeedsAttention("stuck", "Bad Gateway", null);
 }
 
 // 已成功遞送的一列，deliveredAt 指定為呼叫端傳入的時刻——用來驗證 /status 是否
@@ -35,7 +35,7 @@ async function seedDelivered(repository: FakeLedgerRepository, deliveredAt: stri
     text: "已入帳：午餐 120",
     nextAttemptAt: deliveredAt,
   });
-  await repository.markOutboxDelivered("delivered", deliveredAt);
+  await repository.markOutboxDelivered("delivered", deliveredAt, null);
 }
 
 function pendingCount(repository: FakeLedgerRepository): Promise<number> {
