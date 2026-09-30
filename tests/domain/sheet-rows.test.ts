@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { allocationRows, transactionRow } from "../../src/domain/sheet-rows.js";
+import { ALLOCATIONS_HEADER, allocationRows, transactionRow } from "../../src/domain/sheet-rows.js";
 import type { MirrorTransaction } from "../../src/ports/sheet-sync-repository.js";
 
 const base: MirrorTransaction = {
@@ -71,5 +71,60 @@ describe("allocationRows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.[2]).toEqual({ kind: "date", value: 46296 });
     expect(rows[0]?.[10]).toEqual({ kind: "string", value: "deleted" });
+  });
+
+  it("writes every column in the order ALLOCATIONS_HEADER declares", () => {
+    // 修正 B：上面那條測試只咬住日期與狀態兩欄，D–J 七欄（資金流向、用途、金額、
+    // 分類、子分類、對象、備註）完全沒人斷言過——把它們全部換成常數，592 條全綠。
+    // 這裡逐格手寫期望值、每一欄給不同的值，任何一組欄位對調或寫錯都會被抓到。
+    // 期望值刻意不透過 allocationRows 自己算：那樣會讓投影函式對自己的錯誤恆真。
+    const rows = allocationRows({
+      ...base,
+      transactionId: "txn-42",
+      occurredDate: "2026-10-01",
+      status: "confirmed",
+      allocations: [
+        {
+          allocationId: "alloc-77",
+          fundsEffect: "outflow",
+          purpose: "expense",
+          amount: "555.25",
+          categoryName: "餐飲",
+          subcategoryName: "午餐",
+          counterpartyName: "小明",
+          note: "備註內容",
+        },
+      ],
+    });
+
+    expect(rows).toHaveLength(1);
+    // 逐格核對 ALLOCATIONS_HEADER 的欄序：
+    // allocation_id, transaction_id, 日期, 資金流向, 用途, 金額, 分類, 子分類, 對象, 備註, 交易狀態
+    expect(ALLOCATIONS_HEADER).toEqual([
+      "allocation_id",
+      "transaction_id",
+      "日期",
+      "資金流向",
+      "用途",
+      "金額",
+      "分類",
+      "子分類",
+      "對象",
+      "備註",
+      "交易狀態",
+    ]);
+    expect(rows[0]).toEqual([
+      { kind: "string", value: "alloc-77" },
+      { kind: "string", value: "txn-42" },
+      { kind: "date", value: 46296 },
+      { kind: "string", value: "outflow" },
+      { kind: "string", value: "expense" },
+      { kind: "number", value: 555.25 },
+      { kind: "string", value: "餐飲" },
+      { kind: "string", value: "午餐" },
+      { kind: "string", value: "小明" },
+      { kind: "string", value: "備註內容" },
+      { kind: "string", value: "confirmed" },
+    ]);
   });
 });
