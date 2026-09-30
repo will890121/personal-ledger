@@ -197,8 +197,18 @@ export interface GoogleSheetsClientOptions {
   readonly requests?: SheetsApiRequests;
 }
 
-/** 正式環境才會走的那條路：真的建立 GoogleAuth 與 googleapis 的 client。 */
-function realRequests(keyFile: string): SheetsApiRequests {
+/**
+ * 正式環境才會走的那條路：真的建立 GoogleAuth 與 googleapis 的 client。
+ *
+ * 對外開放的唯一理由是 `tests/integration/sheets.integration.test.ts` 的差分測試：
+ * 它要觀察的是**沒有被任何裝飾包過**的原始 API 語意（窄寫入會不會清掉同列其餘欄位、
+ * 超寬寫入會不會被接受、同一批重複列號誰獲勝、讀回來的列尾怎麼截斷），而
+ * `createGoogleSheetsClient` 一定包著 `withHeaderRows`。包著標題列裝飾去量原始語意，
+ * 量到的會是兩層行為的疊加，而那正好是差分測試最不能混淆的東西。
+ *
+ * 正式環境不該直接呼叫它——`createGoogleSheetsClient` 才是唯一的組裝入口。
+ */
+export function createGoogleSheetsApiRequests(keyFile: string): SheetsApiRequests {
   const auth = new google.auth.GoogleAuth({ keyFile, scopes: SCOPES });
   const api = google.sheets({ version: "v4", auth });
   return {
@@ -217,6 +227,6 @@ function realRequests(keyFile: string): SheetsApiRequests {
  * 這樣「忘記接標題列」就不是一個做得到的錯誤。
  */
 export function createGoogleSheetsClient(options: GoogleSheetsClientOptions): SheetsClient {
-  const api = options.requests ?? realRequests(options.keyFile);
+  const api = options.requests ?? createGoogleSheetsApiRequests(options.keyFile);
   return withHeaderRows(createSheetsClientForApi(api, options.spreadsheetId));
 }
