@@ -65,15 +65,14 @@ function recordPreMigrationSnapshot(snapshotPath: string | null): void {
  */
 function composeSheetRunner(parts: {
   readonly config: AppConfig;
-  readonly database: Database.Database;
+  readonly syncRepository: SqliteSheetSyncRepository;
   readonly summaryRepository: SqliteSummaryRepository;
   readonly bot: Bot;
   readonly overrides: RuntimeOverrides;
 }): SheetMirrorRunner | null {
-  const { config, database, summaryRepository, bot, overrides } = parts;
+  const { config, syncRepository, summaryRepository, bot, overrides } = parts;
   if (config.sheets === null) return null;
 
-  const syncRepository = new SqliteSheetSyncRepository(database);
   const sheets =
     overrides.sheetsClient ??
     createGoogleSheetsClient({
@@ -125,6 +124,10 @@ export async function composeRuntime(
     await bootstrapReferenceData(referenceRepository, config.ownerId);
     const repository = new SqliteLedgerRepository(database);
     const summaryRepository = new SqliteSummaryRepository(database);
+    // 一律建立，即使 config.sheets 為 null：/status 需要它才能區分「鏡像關閉」
+    // 與「鏡像開著但從未同步」——沒有憑證時鏡像 runner 不會跑，但這個 repository
+    // 本身只是薄薄一層 SQLite 查詢，建立它不代表鏡像跑起來了。
+    const sheetSyncRepository = new SqliteSheetSyncRepository(database);
     const { bot, outboxRunner } = createLedgerBot({
       token: config.telegramBotToken,
       ownerId: config.ownerId,
@@ -135,12 +138,16 @@ export async function composeRuntime(
       now: () => new Date(),
       today: () => dateInTimezone(new Date(), config.timezone),
       timeOfDay: (at) => timeOfDayInTimezone(at, config.timezone),
+      dateOf: (at) => dateInTimezone(at, config.timezone),
+      // config.sheets 為 null 代表這台機器沒有 Sheets 憑證：/status 要印「未啟用」，
+      // 不把讀狀態用的 repository 交出去（即使它本身無害，交出去等於暗示鏡像開著）。
+      sheetsMirror: config.sheets === null ? null : { syncRepository: sheetSyncRepository },
       schemaVersion: SCHEMA_VERSION,
     });
 
     const sheetRunner = composeSheetRunner({
       config,
-      database,
+      syncRepository: sheetSyncRepository,
       summaryRepository,
       bot,
       overrides,

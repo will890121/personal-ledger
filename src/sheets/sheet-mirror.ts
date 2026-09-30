@@ -77,7 +77,26 @@ export interface SheetMirrorDependencies {
 
 export type SyncOutcome =
   | { readonly kind: "idle" }
-  | { readonly kind: "synced"; readonly transactions: number; readonly months: number }
+  | {
+      readonly kind: "synced";
+      readonly transactions: number;
+      readonly months: number;
+      /**
+       * 這一輪是否真的撈到了變更來源的盡頭（`listChangedTransactions` 回傳一批
+       * 不滿 `SYNC_BATCH`，或直接是空的）。
+       *
+       * 對增量同步而言，`false` 只是「這一批撈滿了，其餘留給下一輪」的正常節奏。
+       * 但對校正而言，`false` 代表被 `RECONCILE_MAX_PAGES` 這個保險絲截斷、
+       * **沒有**驗完整張表——`kind` 仍然是 `"synced"`，呼叫端若只看 `kind` 會把
+       * 這一輪當成完整成功。Task 7 的審查發現這正是問題所在：截斷時 outcome
+       * 和真正掃完一模一樣，而 `lastReconciledAt` 是否前進雖然已經用
+       * `scannedToEnd` 正確把關（見下面 `run()` 的存檔邏輯），但呼叫端
+       * （日誌、未來的告警、這裡的測試）在這之前無從單看回傳值分辨兩者，
+       * 只能之後去翻 `sheet_sync_state` 才看得出來——這個欄位就是把那個區分
+       * 攤開在回傳值上。
+       */
+      readonly scannedToEnd: boolean;
+    }
   | { readonly kind: "failed"; readonly error: unknown };
 
 export interface SheetMirror {
@@ -412,7 +431,7 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
         // Sheet，蓋上時間戳就等於把一個需要有人來看的狀況說成成功。
         lastReconciledAt: mode === "reconcile" && scannedToEnd ? nowIso : state.lastReconciledAt,
       });
-      return { kind: "synced", transactions, months: months.size };
+      return { kind: "synced", transactions, months: months.size, scannedToEnd };
     } catch (error) {
       // 失敗：游標與時間戳全部照抄舊狀態，只加計數、換 lastError。cursor 不動
       // 是設計核心——失敗仍推進游標，那批變更就被永久跳過而沒人發現。

@@ -18,6 +18,58 @@ function minutesAgo(iso: string, now: Date): number {
   return Math.max(0, Math.round((now.getTime() - Date.parse(iso)) / 60_000));
 }
 
+/**
+ * /status 的 Sheets 區段要顯示的原始資料。時間都是 ISO 字串（或 `null` 代表
+ * 「從未」），時區換算留給這個模組自己用注入的 `timeOfDay`／`dateOf` 做——
+ * 呼叫端（telegram/handlers/status.ts）只負責把 repository 讀到的東西原封不動
+ * 交過來，不做任何格式化。
+ */
+export interface SheetsStatusView {
+  readonly lastSuccessAt: string | null;
+  /** 分類字串（例如 "transient:503"），沒有失敗時是 null。見 sheets/sheet-failure.ts。 */
+  readonly lastError: string | null;
+  readonly consecutiveFailures: number;
+  readonly lastReconciledAt: string | null;
+  readonly backlog: number;
+  /** backlog 撞到查詢上限：畫面要印「N+」，不能讓人誤以為那就是精確數字。 */
+  readonly backlogAtLimit: boolean;
+}
+
+/**
+ * 鏡像關閉時只印這一行。刻意不印任何欄位或 0——空白或一排 0 會被誤讀成
+ * 「鏡像開著但一直失敗」，而使用者可能只是還沒設定 Sheets 憑證
+ * （config.sheets 為 null，見 src/config.ts）。
+ */
+const SHEETS_DISABLED_LINE = "Sheets 鏡像：未啟用";
+
+function formatSheetsSection(
+  sheets: SheetsStatusView | null,
+  timeOfDay: (at: Date) => string,
+  dateOf: (at: Date) => string,
+): string[] {
+  if (sheets === null) return ["", SHEETS_DISABLED_LINE];
+
+  // 「從未同步過」與「從未完整校正過」都必須跟啟用中的健康畫面長得不一樣——
+  // 不能印成空白或看起來像時間的東西，否則會被誤讀成「剛剛才同步過」。
+  const lastSync =
+    sheets.lastSuccessAt === null ? "從未同步過" : timeOfDay(new Date(sheets.lastSuccessAt));
+  const lastReconciled =
+    sheets.lastReconciledAt === null
+      ? "從未完整校正過"
+      : `${dateOf(new Date(sheets.lastReconciledAt))} ${timeOfDay(new Date(sheets.lastReconciledAt))}`;
+  const backlogText = `${String(sheets.backlog)}${sheets.backlogAtLimit ? "+" : ""} 筆`;
+
+  return [
+    "",
+    "Sheets 鏡像",
+    `最後成功同步：${lastSync}`,
+    `落後：${backlogText}`,
+    `連續失敗：${String(sheets.consecutiveFailures)} 次`,
+    `最後錯誤：${sheets.lastError ?? "無"}`,
+    `最後完整校正：${lastReconciled}`,
+  ];
+}
+
 function stuckLines(stuck: readonly OutboxMessage[], timeOfDay: (at: Date) => string): string[] {
   return stuck.flatMap((message) => {
     // nextAttemptAt 不是「放棄的那一刻」的精確時間戳：markOutboxNeedsAttention 不會
@@ -40,12 +92,19 @@ function stuckLines(stuck: readonly OutboxMessage[], timeOfDay: (at: Date) => st
  * `timeOfDay` 同理是第四個參數：把 ISO 時刻換算成「幾點幾分」需要知道使用者設定的
  * 時區，而這個模組不該自己認得時區是什麼——認錯或漏接時區的後果，是一則八小時前
  * 就送達的訊息被讀成「還在等」，這正是 /status 要防止的誤判。
+ * `dateOf` 是第五個參數，跟 `timeOfDay` 同一套時區、只是多印日期：Sheets 區段的
+ * 「最後完整校正時間」可能是好幾天前，光印時分會讓「昨天校正過」跟「上星期校正過」
+ * 長得一模一樣，蓋掉校正停住的唯一訊號。
+ * `sheets` 是第六個參數：Sheets 鏡像狀態，`null` 代表整個鏡像關閉（見
+ * SheetsStatusView 與 dependencies.ts 的說明）。
  */
 export function formatStatus(
   summary: OutboxSummary,
   schemaVersion: number,
   now: Date,
   timeOfDay: (at: Date) => string,
+  dateOf: (at: Date) => string,
+  sheets: SheetsStatusView | null,
 ): DraftPrompt {
   const oldestSuffix =
     summary.pending > 0 && summary.oldestPendingAt
@@ -65,6 +124,7 @@ export function formatStatus(
   if (summary.stuck.length > 0) {
     lines.push("", ...stuckLines(summary.stuck, timeOfDay));
   }
+  lines.push(...formatSheetsSection(sheets, timeOfDay, dateOf));
 
   const keyboard: InlineKeyboardButton[][] = [
     // 空佇列時按下去只會是個沒有效果的按鈕，容易讓人誤以為「按了才會重試」；

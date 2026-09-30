@@ -47,7 +47,7 @@ describe("sheet mirror quiesces", () => {
     });
 
     const first = await mirror.syncOnce();
-    expect(first).toEqual({ kind: "synced", transactions: 2, months: 1 });
+    expect(first).toEqual({ kind: "synced", transactions: 2, months: 1, scannedToEnd: true });
     const callsWhileWorking = sheets.callCount;
     expect(callsWhileWorking).toBeGreaterThan(0);
 

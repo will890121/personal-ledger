@@ -148,3 +148,81 @@ describe("/status", () => {
     expect(JSON.stringify(calls.at(-1)?.payload)).not.toContain("重試全部");
   });
 });
+
+describe("/status 的 Sheets 區段", () => {
+  it("鏡像關閉時只印「未啟用」，不印任何欄位或 0", async () => {
+    // harness() 預設不傳 sheetsMirror，等同 config.sheets 為 null——這台機器
+    // 沒有 Sheets 憑證。空白或一排 0 會被誤讀成「鏡像開著但一直失敗」，
+    // 所以這裡要釘住：畫面上完全看不到任何欄位標籤，只有「未啟用」這一行。
+    const { bot, calls } = harness();
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const text = getText(calls.at(-1)) ?? "";
+    expect(text).toContain("Sheets 鏡像：未啟用");
+    expect(text).not.toContain("最後成功同步");
+    expect(text).not.toContain("落後");
+    expect(text).not.toContain("連續失敗");
+    expect(text).not.toContain("最後錯誤");
+    expect(text).not.toContain("最後完整校正");
+  });
+
+  it("啟用但從未同步過：每個欄位都要印，且不能跟「關閉」或「健康」長得一樣", async () => {
+    // sheetsMirror: {} 給的是全零狀態（cursor/lastSuccessAt/lastReconciledAt
+    // 都是 null，consecutiveFailures 是 0，changedCount 預設 0）——這正是
+    // 「剛設定好憑證、鏡像還沒跑過第一輪」的樣子。
+    const { bot, calls } = harness({ sheetsMirror: {} });
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const text = getText(calls.at(-1)) ?? "";
+    expect(text).not.toContain("未啟用");
+    expect(text).toContain("Sheets 鏡像");
+    expect(text).toContain("最後成功同步：從未同步過");
+    expect(text).toContain("落後：0 筆");
+    expect(text).toContain("連續失敗：0 次");
+    expect(text).toContain("最後錯誤：無");
+    expect(text).toContain("最後完整校正：從未完整校正過");
+  });
+
+  it("健康的鏡像：每個欄位都印出正確值，時間換算成設定時區", async () => {
+    const { bot, calls } = harness({
+      sheetsMirror: {
+        state: {
+          lastSuccessAt: "2026-09-29T23:50:00.000Z", // Asia/Taipei 07:50
+          lastError: "permanent:403",
+          consecutiveFailures: 3,
+          lastReconciledAt: "2026-09-25T20:15:00.000Z", // Asia/Taipei 隔天 04:15
+        },
+        changedCount: 7,
+      },
+    });
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const text = getText(calls.at(-1)) ?? "";
+    // 拿掉任何一個 toContain 都必須讓對應的欄位在實作裡也不見了才會變紅——
+    // 每一行都是這個健康情境獨有的字面值，不會被其他情境的斷言誤打中。
+    expect(text).toContain("最後成功同步：07:50");
+    expect(text).toContain("落後：7 筆");
+    expect(text).toContain("連續失敗：3 次");
+    expect(text).toContain("最後錯誤：permanent:403");
+    // 時間換算必須用設定時區：20:15 UTC 換成 Asia/Taipei 是隔天 04:15，
+    // 若忘記轉時區、直接印 UTC 的日期時分，這裡會看到 "2026-09-25 20:15"。
+    expect(text).toContain("最後完整校正：2026-09-26 04:15");
+    expect(text).not.toContain("從未同步過");
+    expect(text).not.toContain("從未完整校正過");
+    expect(text).not.toContain("未啟用");
+    // 試算表 id 是機敏欄位，不管有沒有值都不該出現在 /status。
+    expect(text).not.toContain("spreadsheet");
+  });
+
+  it("落後筆數撞到查詢上限時印成「N+」，不能看起來像精確值", async () => {
+    const { bot, calls } = harness({ sheetsMirror: { changedCount: 5000 } });
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const text = getText(calls.at(-1)) ?? "";
+    expect(text).toContain("落後：5000+ 筆");
+  });
+});

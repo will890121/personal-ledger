@@ -273,6 +273,10 @@ describe("sheet mirror", () => {
     const outcome = await mirror.reconcile();
 
     expect(outcome.kind).toBe("synced");
+    // 真的掃完全表：scannedToEnd 必須是 true，否則 /status 顯示的「最後完整校正
+    // 時間」與這個 outcome 對不上——這是本檔案下面「truncation guards」那組測試
+    // 要對照的健康情境。
+    expect(outcome).toMatchObject({ scannedToEnd: true });
     expect(saved).toHaveLength(1);
     expect(saved[0]?.lastReconciledAt).toBe(NOW.toISOString());
     expect(saved[0]?.cursorUpdatedAt).toBe("2026-12-31T00:00:00.000Z");
@@ -334,9 +338,12 @@ describe("sheet mirror reconcile truncation guards", () => {
 
     const outcome = await mirror.reconcile();
 
-    // 截斷之後 outcome 仍然是 synced——這正是危險之處：沒有任何訊號告訴使用者
-    // 這一輪沒驗完整張表。拿掉「截斷時跳過清理」的守衛，下面三列會被清空。
-    expect(outcome.kind).toBe("synced");
+    // 截斷之後 outcome.kind 仍然是 synced——這正是危險之處：光看 kind 不會知道
+    // 這一輪沒驗完整張表。scannedToEnd 就是補上的那個訊號：它必須是 false，
+    // 否則呼叫端（未來的日誌、/status 間接依賴的 lastReconciledAt 存檔邏輯）
+    // 沒有任何辦法把這一輪跟真正掃完的一輪分開。拿掉「截斷時跳過清理」的
+    // 守衛，下面三列會被清空。
+    expect(outcome).toMatchObject({ kind: "synced", scannedToEnd: false });
     const rows = sheets.snapshot("Transactions");
     expect(rows[1]).toEqual(EXISTING_ROW("00000000-0000-4000-8000-000000000001", "500"));
     expect(rows[2]).toEqual(EXISTING_ROW("00000000-0000-4000-8000-000000000002", "500"));
@@ -348,7 +355,7 @@ describe("sheet mirror reconcile truncation guards", () => {
 
     const outcome = await mirror.reconcile();
 
-    expect(outcome.kind).toBe("synced");
+    expect(outcome).toMatchObject({ kind: "synced", scannedToEnd: false });
     expect(saved).toHaveLength(1);
     // 拿掉「截斷時不蓋 last_reconciled_at」的守衛，這裡會變成 NOW.toISOString()。
     expect(saved[0]?.lastReconciledAt).toBe("2026-09-01T00:00:00.000Z");

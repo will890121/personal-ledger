@@ -388,7 +388,9 @@ describe("sheet mirror convergence", () => {
     const sheets = emptyWorkbook();
     const outcome = await mirrorOver(sheets).reconcile();
 
-    expect(outcome).toEqual({ kind: "synced", transactions: total, months: 1 });
+    // scannedToEnd 必須是 true：這一輪真的撈到了變更來源的盡頭（最後一頁不滿
+    // SYNC_BATCH），不是被 RECONCILE_MAX_PAGES 截斷的那種「synced 但沒驗完」。
+    expect(outcome).toEqual({ kind: "synced", transactions: total, months: 1, scannedToEnd: true });
     const ids = mirrorRows(sheets.snapshot("Transactions")).map((row) => row[0]);
     expect(ids).toHaveLength(total);
     expect(ids).toContain(lastId);
