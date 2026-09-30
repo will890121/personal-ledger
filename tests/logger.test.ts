@@ -149,6 +149,8 @@ describe("logger", () => {
     "serviceAccountKey",
     "privateKey",
     "client_email",
+    // M-5：金鑰檔路徑，任何深度都不得原樣印出。
+    "keyFile",
   ] as const;
 
   it.each(DENYLISTED_FIELD_NAMES)("drops the %s field entirely, on its own", (field) => {

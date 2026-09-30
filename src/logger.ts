@@ -22,6 +22,9 @@ const DENYLISTED_FIELDS: ReadonlySet<string> = new Set([
   "serviceAccountKey",
   "privateKey",
   "client_email",
+  // M-5：金鑰檔的路徑。spreadsheetId 巢狀出現一樣會被遮，但 keyFile 原本不會——
+  // 而金鑰路徑跟 spreadsheetId 一樣在「正式日誌不得含」的清單裡。
+  "keyFile",
 ]);
 
 // Telegram bot token 的樣式：一串數字、冒號、後面接一長串 base64url 字元
