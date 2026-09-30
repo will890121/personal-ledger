@@ -33,6 +33,36 @@ describe("outbox storage", () => {
       .run(messageId, replyMarkup ?? null, nextAttemptAt, nextAttemptAt);
   }
 
+  // seed() 永遠寫 'pending'，整個檔案因此從來沒有一列別的狀態——真實 SQL 的
+  // status 述詞也就一直沒有被守住（把它改成 status != 'delivered' 原本存活全部測試）。
+  function seedWithStatus(messageId: string, status: string, nextAttemptAt: string): void {
+    database
+      .prepare(
+        `INSERT INTO outbox_messages
+           (message_id, owner_id, cause, chat_id, target_message_id, text, reply_markup,
+            status, attempts, next_attempt_at, created_at, last_error)
+         VALUES (?, 'owner-1', 'transaction_confirmed', '55', '77', '已入帳', NULL,
+                 ?, 4, ?, ?, 'Forbidden')`,
+      )
+      .run(messageId, status, nextAttemptAt, nextAttemptAt);
+  }
+
+  it("claims pending rows only, never a needs_attention or delivered one", async () => {
+    // spec §5：「重啟不會自動重設 needs_attention」——自動重送等於把「不無限重試」
+    // 從後門繞過去。這條規則原本只在 FakeLedgerRepository 上被守住，真的 SQL 是裸的。
+    seedWithStatus("stuck", "needs_attention", NOW);
+    seedWithStatus("done", "delivered", NOW);
+    seed("due", NOW);
+
+    // 時間推到遠比到期時間晚，排除「只是還沒到期」這個解釋。
+    const claimed = await repository.claimDueOutbox("owner-1", LATER, LATER, 10);
+
+    expect(claimed.map((item) => item.messageId)).toEqual(["due"]);
+    expect(
+      database.prepare("SELECT status FROM outbox_messages WHERE message_id = 'stuck'").get(),
+    ).toEqual({ status: "needs_attention" });
+  });
+
   it("claims only rows that are due and not already leased", async () => {
     seed("due", NOW);
     seed("future", LATER);
