@@ -134,4 +134,36 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // 「googleapis 只有 google-sheets-client.ts 一個入口」這句話在上面的
+    // src/sheets/ zone 裡只管到 src/sheets/ 目錄本身——src/db/、src/parser/、
+    // src/telegram/、src/main.ts、src/config.ts、src/timezone.ts、
+    // src/logger.ts 都不在那個 zone 管轄範圍內，googleapis import 放進去一樣
+    // 會通過 lint。這一條補的就是那句約束真正該有的範圍：整個 src/**，
+    // 只留 google-sheets-client.ts 一個例外。
+    files: ["src/**/*.ts"],
+    ignores: ["src/sheets/google-sheets-client.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["googleapis", "googleapis/*"],
+              message:
+                "googleapis 只有 src/sheets/google-sheets-client.ts 一個入口：其餘檔案一律不得直接依賴它，需要 Sheets 能力時透過 ports 收窄過的介面呼叫。",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]);
+
+// 這份設定擋得住的是「這個檔案自己的 import 行」，不是依賴圖：A 檔案沒有直接
+// import googleapis／grammY，但它 import 了另一個違規 import 的檔案，這條規則
+// 一樣會放行——那是傳遞路徑，no-restricted-imports 看不到。動態 import()
+// 也一樣不設防，同一個理由。這是刻意的取捨，不是漏洞：要擋傳遞路徑得換成
+// no-restricted-paths 或 dependency-cruiser，那是新依賴加新設定，而這個專案裡
+// 動態 import googleapis 沒有任何理由會發生、傳遞路徑則會先被 code review 看到，
+// 代價超過它消除的風險。一條宣稱自己擋得比實際多的規則，比沒有規則更危險。
