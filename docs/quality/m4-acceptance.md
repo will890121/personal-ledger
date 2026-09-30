@@ -8,7 +8,7 @@
 
 ## 關卡一：自動驗證
 
-- `pnpm check` **exit 0**：72 檔 / **496 測試**（M3b 結案時的起點是 384）。以 Docker 內
+- `pnpm check` **exit 0**：73 檔 / **510 測試**（M3b 結案時的起點是 384）。以 Docker 內
   `pnpm check` 的**離開碼**確認，不看 grep 過的輸出——`user-category-keywords-acceptance.md`
   記錄過 grep 漏看單數 `1 problem` 導致誤判全綠的教訓，這次全程只看 exit code。
 - Docker 建置：`docker build` 通過（Dockerfile 的 `build` 階段本身就跑
@@ -36,7 +36,7 @@
   **接線本身也被守住**：`tests/smoke/runtime.test.ts` 真的跑過 `composeRuntime`，確認快照在
   migration **之前**產生（快照內容仍是 schema 1），且快照失敗會讓啟動中止、資料庫留在
   升級前的版本。這兩條是 2026-09-30 整體審查後補的——在那之前，把快照挪到 `migrate()`
-  之後、或把快照失敗吞掉，兩個變異都能存活全部 496 條測試。
+  之後、或把快照失敗吞掉，兩個變異都能存活當時全部 496 條測試。
 - **AC-28（正式環境發生錯誤，log 不含完整財務原文或憑證）**：`src/logger.ts` 是全專案唯一
   允許呼叫 `console.*` 的地方（`eslint.config.mjs` 只對它開例外），其餘一律經過這裡才會被
   遮罩規則管到。`tests/logger.test.ts` 涵蓋：bot token 樣式偵測（即使沒放在拒絕清單的欄位裡也
