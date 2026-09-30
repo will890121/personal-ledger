@@ -121,7 +121,7 @@ Telegram 會收到「⚠️ Sheets 鏡像連續失敗」。
 
 ## 關卡一：自動驗證
 
-- **`pnpm check` exit 0**：**90 檔 / 662 測試**（M4 結案時的起點是 73 檔 / 510 測試）。
+- **`pnpm check` exit 0**：**90 檔 / 667 測試**（M4 結案時的起點是 73 檔 / 510 測試）。
   以 Docker 內 `pnpm check` 的**離開碼**確認，不看 grep 過的輸出 ——
   `user-category-keywords-acceptance.md` 記錄過 grep 漏看單數 `1 problem` 導致誤判
   全綠的教訓，本里程碑全程只看 exit code。
@@ -182,10 +182,32 @@ Telegram 會收到「⚠️ Sheets 鏡像連續失敗」。
 
 ## 關卡二：程式審查
 
-**待執行。** 依完成定義，對整個分支的 diff（`main...m5a-sheets-mirror`，49 個 commit）
-執行 `superpowers:requesting-code-review` 並逐條裁決，結論與修法補在這一節。
+**待執行。** 依完成定義，對整個分支的 diff（`main...m5a-sheets-mirror`）執行
+`superpowers:requesting-code-review` 並逐條裁決，結論與修法補在這一節。
 沿用 M4 的標準：宣稱被保護的行為，一律附「把它改壞、對應測試變紅」的證據與失敗訊息
 原文，自我宣稱不算數。
+
+### 更正：commit `71a684f` 的訊息有一句不成立
+
+`71a684f`（`fix(sheets): 正式 client 的 factory 一定包上 withHeaderRows，並釘住 OAuth
+scope`）的 commit 訊息，以及 Task 10 的修正報告，都聲稱那次修正「順便殺掉」了另一個
+審查發現：`src/main.ts` 把 `keyFile` 與 `spreadsheetId` 兩個欄位交給
+`createGoogleSheetsClient` 時有沒有交錯。
+
+**那句話是錯的。** 事後複審實測過：把 `src/main.ts` 裡那兩個值互換，整個測試套件
+**依然全綠**。原因是每一條會設定 sheets 的 `composeRuntime` 測試都傳了覆寫用的
+client（`RuntimeOverrides.sheetsClient`），所以真正的那段接線從來沒有被任何測試執行到。
+`71a684f` 釘住的是「正式 factory 一定包上 `withHeaderRows`」與 OAuth scope，那兩件事
+成立；它沒有、也無法順便守住欄位有沒有交錯。
+
+這個發現最後仍**以 Nit 結案，不補測試**，理由有兩條：交錯那兩個值必須同時把欄位名稱
+寫對而把值寫反，不是手滑打得出來的形狀；而且正式環境會自己喊出來 ——
+把 spreadsheet id 當成金鑰檔路徑會讓每一次呼叫都 ENOENT，失敗分類判為 transient、
+連續五次之後發出 Telegram 告警，`/status` 上也看得到。它不會是一個安靜的錯誤。
+
+更正寫在這裡而不是改 commit 訊息，是因為分支上還有並行的工作，重寫歷史不安全。
+這段錯誤的說法曾經被一路轉抄進其他筆記，所以記錄必須寫明白：**`71a684f` 的
+commit 訊息在這一點上不可信，以本節為準。**
 
 ## 關卡三：人工驗收
 
@@ -243,6 +265,7 @@ Telegram 會收到「⚠️ Sheets 鏡像連續失敗」。
 
 ## 結論
 
-自動驗證的 `pnpm check` 已 exit 0（90 檔 / 662 測試），部署路徑的兩個缺口已修補。
+自動驗證的 `pnpm check` 已 exit 0（90 檔 / 667 測試），部署路徑的三個缺口已修補
+（變數轉發、金鑰掛載、資料卷名）。
 `pnpm test:sheets` **尚未對真實 Google 執行過**，程式審查與人工驗收待執行 ——
 三者都完成之後才能把 M5a 標為結案。
