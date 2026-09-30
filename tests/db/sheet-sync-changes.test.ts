@@ -3,72 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { migrate } from "../../src/db/migrate.js";
 import { SqliteSheetSyncRepository } from "../../src/db/sqlite-sheet-sync-repository.js";
+import { seedTransaction } from "../fixtures/sheet-sync-seed.js";
 
 const OWNER = "owner-1";
-
-// 注意：這個 seed 直接對照 migrations 0001/0002/0003 之後的實際 schema寫，
-// 不是憑印象或憑 migration 檔案「應該長怎樣」推測——欄位名稱與 NOT NULL /
-// CHECK 限制都以 `.schema` 實際輸出為準。
-function seedTransaction(
-  database: Database.Database,
-  input: {
-    id: string;
-    updatedAt: string;
-    occurredDate?: string;
-    status?: string;
-    amount?: string;
-  },
-): void {
-  const occurredDate = input.occurredDate ?? "2026-10-01";
-  const amount = input.amount ?? "100";
-  const status = input.status ?? "confirmed";
-
-  database
-    .prepare(
-      `INSERT INTO input_events (
-         event_id, owner_id, telegram_update_id, source_type, source_ref, raw_text, received_at
-       ) VALUES (?, ?, ?, 'telegram', '1', 'seed', ?)`,
-    )
-    .run(`evt-${input.id}`, OWNER, `evt-${input.id}`, input.updatedAt);
-
-  database
-    .prepare(
-      `INSERT INTO drafts (
-         draft_id, owner_id, request_id, source_event_id, occurred_date, status,
-         draft_json, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'archived', '{}', ?, ?)`,
-    )
-    .run(
-      `draft-${input.id}`,
-      OWNER,
-      `req-${input.id}`,
-      `evt-${input.id}`,
-      occurredDate,
-      input.updatedAt,
-      input.updatedAt,
-    );
-
-  database
-    .prepare(
-      `INSERT INTO transactions (
-         transaction_id, draft_id, owner_id, request_id, source_event_id, source_type, source_ref,
-         occurred_date, amount, currency, status, confirmed_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'telegram', '1', ?, ?, 'TWD', ?, ?, ?, ?)`,
-    )
-    .run(
-      input.id,
-      `draft-${input.id}`,
-      OWNER,
-      `req-${input.id}`,
-      `evt-${input.id}`,
-      occurredDate,
-      amount,
-      status,
-      input.updatedAt,
-      input.updatedAt,
-      input.updatedAt,
-    );
-}
 
 describe("listChangedTransactions", () => {
   let database: Database.Database;
@@ -91,18 +28,19 @@ describe("listChangedTransactions", () => {
   });
 
   it("returns every transaction when the cursor is null", async () => {
-    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "t2", updatedAt: "2026-10-01T00:00:01.000Z" });
+    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "t2", updatedAt: "2026-10-01T00:00:01.000Z" });
 
     const rows = await repository.listChangedTransactions(OWNER, null, 100);
 
     expect(rows.map((row) => row.transactionId)).toEqual(["t1", "t2"]);
   });
 
-  it("includes the row sitting exactly on the cursor", async () => {
-    // 游標語意是 >= 而不是 >。重寫邊界那一列是冪等的、代價為零；
-    // 而用 > 的話，下面那條同毫秒的測試會永久漏掉一筆。
-    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+  it("excludes the row sitting exactly on the cursor", async () => {
+    // 游標那一列在上一輪已經同步完了，游標就是停在它身上。再撈一次不是「冪等地
+    // 重寫、代價為零」——它會讓系統永遠靜不下來：沒有任何新變更時，每一輪都還是
+    // 撈到這一列、還是打四次 Sheets API、還是把摘要的更新時間重寫一遍。
+    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
 
     const rows = await repository.listChangedTransactions(
       OWNER,
@@ -110,15 +48,16 @@ describe("listChangedTransactions", () => {
       100,
     );
 
-    expect(rows.map((row) => row.transactionId)).toEqual(["t1"]);
+    expect(rows.map((row) => row.transactionId)).toEqual([]);
   });
 
   it("does not lose a transaction that shares the cursor's millisecond", async () => {
     // Review Focus #4。t1 與 t2 的 updated_at 完全相同；上一輪在 t1 停下，
-    // 游標是 (該毫秒, "t1")。若查詢寫成 updated_at > cursor，t2 會被永遠跳過——
-    // 它的 updated_at 不大於游標，而且之後再也不會變。
-    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "t2", updatedAt: "2026-10-01T00:00:00.000Z" });
+    // 游標是 (該毫秒, "t1")。t2 不能被跳過——若外層那一半的比較寫成只看
+    // updated_at（沒有 transaction_id 的 tie-break），t2 的時間不大於游標，
+    // 就會永遠撈不到，而且它的 updated_at 之後再也不會變。
+    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "t2", updatedAt: "2026-10-01T00:00:00.000Z" });
 
     const rows = await repository.listChangedTransactions(
       OWNER,
@@ -126,7 +65,7 @@ describe("listChangedTransactions", () => {
       100,
     );
 
-    expect(rows.map((row) => row.transactionId)).toEqual(["t1", "t2"]);
+    expect(rows.map((row) => row.transactionId)).toEqual(["t2"]);
   });
 
   it("does not re-deliver a transaction sorting before the cursor within the same millisecond", async () => {
@@ -134,10 +73,10 @@ describe("listChangedTransactions", () => {
     // 上一輪在 t1 停下，游標是 (該毫秒, "t1")。外層比較若誤寫成
     // updated_at >= cursor，整個 OR 分支會被 updated_at 這一半吃掉——退化成
     // 純粹的 updated_at >= cursor，t0 因為時間相同而被重新撈出，且每一輪都會
-    // 再撈一次，永遠重工。正確結果應該排除 t0，只留 t1、t2。
-    seedTransaction(database, { id: "t0", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "t2", updatedAt: "2026-10-01T00:00:00.000Z" });
+    // 再撈一次，永遠重工。正確結果是只留排在游標之後的 t2。
+    seedTransaction(database, OWNER, { id: "t0", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "t2", updatedAt: "2026-10-01T00:00:00.000Z" });
 
     const rows = await repository.listChangedTransactions(
       OWNER,
@@ -145,13 +84,13 @@ describe("listChangedTransactions", () => {
       100,
     );
 
-    expect(rows.map((row) => row.transactionId)).toEqual(["t1", "t2"]);
+    expect(rows.map((row) => row.transactionId)).toEqual(["t2"]);
   });
 
   it("orders by (updated_at, transaction_id) so the cursor is well defined", async () => {
-    seedTransaction(database, { id: "tb", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "ta", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "tc", updatedAt: "2026-09-30T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "tb", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "ta", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "tc", updatedAt: "2026-09-30T00:00:00.000Z" });
 
     const rows = await repository.listChangedTransactions(OWNER, null, 100);
 
@@ -161,7 +100,7 @@ describe("listChangedTransactions", () => {
   it("includes soft-deleted transactions so the mirror can mark them", async () => {
     // 已刪除的交易仍要進鏡像（狀態欄寫已刪除），否則 Sheet 上會留著一列看起來還存在的
     // 交易。查詢若過濾掉 status='deleted'，刪除就永遠不會傳播出去。
-    seedTransaction(database, {
+    seedTransaction(database, OWNER, {
       id: "t1",
       updatedAt: "2026-10-01T00:00:00.000Z",
       status: "deleted",
@@ -174,7 +113,7 @@ describe("listChangedTransactions", () => {
   });
 
   it("carries each transaction's allocations", async () => {
-    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
     const categoryId = (
       database.prepare("SELECT category_id FROM categories LIMIT 1").get() as
         { category_id: string } | undefined
@@ -206,9 +145,9 @@ describe("listChangedTransactions", () => {
   });
 
   it("respects the limit", async () => {
-    seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
-    seedTransaction(database, { id: "t2", updatedAt: "2026-10-01T00:00:01.000Z" });
-    seedTransaction(database, { id: "t3", updatedAt: "2026-10-01T00:00:02.000Z" });
+    seedTransaction(database, OWNER, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
+    seedTransaction(database, OWNER, { id: "t2", updatedAt: "2026-10-01T00:00:01.000Z" });
+    seedTransaction(database, OWNER, { id: "t3", updatedAt: "2026-10-01T00:00:02.000Z" });
 
     const rows = await repository.listChangedTransactions(OWNER, null, 2);
 

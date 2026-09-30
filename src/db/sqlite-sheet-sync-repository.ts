@@ -110,11 +110,14 @@ export class SqliteSheetSyncRepository implements SheetSyncRepository {
     cursor: SyncCursor | null,
     limit: number,
   ): Promise<MirrorTransaction[]> {
-    // 游標語意刻意是 >=：兩列可能共用同一個 updated_at 毫秒值，用 > 會讓排在游標
-    // 後面、但時間相同的那一列永遠被跳過（它的時間之後不會再變）。重寫邊界那一列
-    // 是冪等的，代價為零。
+    // 游標語意是嚴格 >，兩層比較都是。游標存的是 (updated_at, transaction_id) 這個
+    // 元組，而 transaction_id 唯一，所以元組是全序——「嚴格大於游標」剛好等於
+    // 「排在游標之後」，同毫秒但 id 較大的那一列仍會被 transaction_id > 撈到，
+    // 一筆都不會漏。（會漏的是游標只存 updated_at 的設計，那不是這裡的設計。）
+    // 反過來寫成 >= 的代價很實在：游標那一列每一輪都被重撈，系統永遠靜不下來，
+    // 閒置時照樣每輪三讀一寫，而摘要分頁的「更新時間」欄也會一直跳動。
     const cursorClause = cursor
-      ? "AND (t.updated_at > @cursorUpdatedAt OR (t.updated_at = @cursorUpdatedAt AND t.transaction_id >= @cursorTransactionId))"
+      ? "AND (t.updated_at > @cursorUpdatedAt OR (t.updated_at = @cursorUpdatedAt AND t.transaction_id > @cursorTransactionId))"
       : "";
 
     const transactionRows = this.database

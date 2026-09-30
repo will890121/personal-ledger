@@ -68,6 +68,13 @@ function locate(locator: RowLocator, key: string): number {
 }
 
 /**
+ * 日期欄唯一接受的形狀：純十進位數字，可帶小數（Sheets 的日期時間序列值）。
+ * 不能用 `Number()` 加 `Number.isFinite` 代替——`Number("0x10")` 是 16，
+ * 一格使用者亂打的內容就會被當成 1900-01-16，多重算一個根本沒被影響的月份。
+ */
+const DECIMAL_SERIAL = /^\d+(?:\.\d+)?$/;
+
+/**
  * Sheet 上這些 transaction_id 目前記著的日期（`YYYY-MM-DD`）。
  *
  * 空格或不是數字就整筆略過而不是猜一個值：沒有舊值是常態（新交易本來就還沒有列），
@@ -78,11 +85,9 @@ function previousDatesOf(rows: readonly (readonly string[])[]): Map<string, stri
   for (let i = 1; i < rows.length; i += 1) {
     const row = rows[i];
     const key = row?.[0] ?? "";
-    const raw = row?.[1] ?? "";
-    if (key === "" || raw.trim() === "") continue;
-    const serial = Number(raw);
-    if (!Number.isFinite(serial)) continue;
-    dates.set(key, fromSheetSerialDate(serial));
+    const raw = (row?.[1] ?? "").trim();
+    if (key === "" || !DECIMAL_SERIAL.test(raw)) continue;
+    dates.set(key, fromSheetSerialDate(Number(raw)));
   }
   return dates;
 }

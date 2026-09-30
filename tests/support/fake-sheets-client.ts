@@ -20,7 +20,14 @@ const render = (cell: SheetCell): string => {
  */
 export class FakeSheetsClient implements SheetsClient {
   public callCount = 0;
+  /** 讓下一次呼叫（不分讀寫）失敗。 */
   public failNextWith: Error | null = null;
+  /**
+   * 只讓下一次 `updateCells` 失敗。同步是「先三次讀、再一次寫」，用
+   * `failNextWith` 永遠只會打到第一次讀——「讀成功、寫失敗」這條路徑
+   * （也就是真正要驗的那條）就永遠測不到。
+   */
+  public failNextWriteWith: Error | null = null;
   private readonly tabs: Map<string, string[][]>;
 
   public constructor(initial: Record<string, string[][]> = {}) {
@@ -45,6 +52,11 @@ export class FakeSheetsClient implements SheetsClient {
 
   public updateCells(writes: readonly CellWrite[]): Promise<void> {
     this.callCount += 1;
+    if (this.failNextWriteWith) {
+      const error = this.failNextWriteWith;
+      this.failNextWriteWith = null;
+      return Promise.reject(error);
+    }
     if (this.failNextWith) {
       const error = this.failNextWith;
       this.failNextWith = null;
