@@ -141,12 +141,13 @@ M5 拆成三塊，順序 a → b → c。M5a 先做，因為使用者要把 Shee
 #### M5a：Google Sheets 單向鏡像
 
 狀態：**實作完成、驗收未完成**（2026-10-01，schema 9，90 檔 / **667 個測試**，
-M4 結案時的起點是 510）。三道關卡只過了第一道，**尚未結案**：
+M4 結案時的起點是 510）。三道關卡只過了第一道，**尚未結案**（與
+[`docs/quality/m5a-acceptance.md`](quality/m5a-acceptance.md) 同一種切法：
+`pnpm test:sheets` 併在關卡一，不算獨立的第四道）：
 
 | 關卡 | 狀態 |
 |---|---|
-| 自動驗證（`pnpm check` exit 0） | ✅ 已完成 |
-| `pnpm test:sheets` 對真實試算表跑綠 | ⬜ 未執行（實作環境沒有 GCP 憑證，從未對真實 Google 跑過） |
+| 自動驗證（`pnpm check` exit 0，另加 `pnpm test:sheets` 對真實試算表跑綠） | 🟡 部分完成——`pnpm check` 已綠，`pnpm test:sheets` 未執行（實作環境沒有 GCP 憑證，從未對真實 Google 跑過） |
 | 整個分支的程式審查 | ⬜ 未完成 |
 | 人工驗收清單 | ⬜ 未執行 |
 
