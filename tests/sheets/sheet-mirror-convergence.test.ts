@@ -459,6 +459,51 @@ describe("sheet mirror convergence", () => {
     expect(sheets.snapshot("Allocations").map((row) => row[0])).toContain("這格是我自己算的");
   });
 
+  it("never clears a hand-typed allocation row that quotes a live transaction id", async () => {
+    // 這條守的是 buildWrites 裡那道「鍵欄不是 UUID 形狀就不准動」的守衛
+    // （sheet-mirror.ts 的 `MIRROR_ID.test(allocationKeys[i]?.[0] ?? "")`）。
+    //
+    // 上面那條測試守不住它：那裡的手打列只有 A 欄有字、**B 欄是空的**，於是
+    // 下一行的 `changedIds.has("")` 已經先擋掉，UUID 那一行從來不是決定性條件。
+    // 現實中最可能發生的偏偏是這一種——使用者在 Allocations 自己加一列做註記，
+    // A 欄寫中文說明、B 欄照抄那筆交易的 transaction_id（要做 VLOOKUP，或只是
+    // 標明在講哪一筆）。少了那道守衛，那筆交易下一次有變動時（走增量路徑，
+    // 不必等半夜的校正）這一列會被整列清空：沒有警告，也沒有 undo。
+    seedTransaction(database, OWNER, { id: T1, updatedAt: "2026-10-05T00:00:01.000Z" });
+    addAllocation({ allocationId: A1, transactionId: T1, amount: "100" });
+
+    // A 欄是中文說明（過不了 UUID 形狀檢查）、B 欄是真的、而且待會就會被更新的
+    // transaction_id；備註欄也寫了東西，才看得出「整列」有沒有被清掉。
+    const annotation = Array.from({ length: ALLOCATIONS_HEADER.length }, () => "");
+    annotation[0] = "尾牙分攤（我自己加的）";
+    annotation[1] = T1;
+    annotation[9] = "跟同事收 300";
+    const sheets = new FakeSheetsClient({
+      Transactions: [[...TRANSACTIONS_HEADER]],
+      Allocations: [[...ALLOCATIONS_HEADER], [...annotation]],
+      MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
+    });
+
+    const mirror = mirrorOver(sheets);
+    expect((await mirror.syncOnce()).kind).toBe("synced");
+    expect(sheets.snapshot("Allocations")[1]).toEqual(annotation);
+
+    // 那筆交易有變動：updateTransaction 是「DELETE 全部配置再 INSERT」，
+    // 所以 allocation_id 也換了一個——這正是 buildWrites 會去清同一批交易底下
+    // 那些「不會被覆寫的配置列」的時機。
+    database.prepare("DELETE FROM allocations WHERE transaction_id = ?").run(T1);
+    addAllocation({ allocationId: A1B, transactionId: T1, amount: "150" });
+    touch(T1, { updatedAt: "2026-10-06T00:00:01.000Z", amount: "150" });
+
+    expect((await mirror.syncOnce()).kind).toBe("synced");
+
+    // 手打的那一列：一格都不准被動到。
+    expect(sheets.snapshot("Allocations")[1]).toEqual(annotation);
+    // 同一輪裡舊的配置列仍然要被清掉——守衛不能寬到把該清的也放過。
+    expect(mirrorRows(sheets.snapshot("Allocations")).map((row) => row[0])).toEqual([A1B]);
+    await expectConverged(sheets);
+  });
+
   it("clears an allocation row whose allocation no longer exists", async () => {
     // updateTransaction 是「DELETE 全部配置再 INSERT」，所以改一筆交易之後舊的
     // allocation_id 就永遠消失了。這條走的是增量路徑：這個缺口不能只有每日校正
