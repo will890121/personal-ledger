@@ -69,6 +69,35 @@ describe("FakeSheetsClient", () => {
     expect(await client.readColumns("Transactions", 1)).toEqual([["id"], ["t1"]]);
   });
 
+  it("rejects a write whose cell count does not match the header width", async () => {
+    // 真實的 UpdateCellsRequest 只碰指定範圍，範圍外的欄位不會被清空。模擬器若
+    // 靜默「整列取代」，這個落差在測試裡永遠不會被抓到——所以欄數不合就該拋錯。
+    const client = new FakeSheetsClient({ Transactions: [["id", "日期", "金額"]] });
+
+    await expect(
+      client.updateCells([
+        { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "t1" }] },
+      ]),
+    ).rejects.toThrow(/Transactions row 2/);
+
+    expect(await client.readColumns("Transactions", 3)).toEqual([["id", "日期", "金額"]]);
+  });
+
+  it("rejects a batch that writes to the same row twice", async () => {
+    // 同一批裡兩筆寫到同一列代表引擎的列號算錯了，靜默後寫獲勝會讓這個錯誤
+    // 完全沒有訊號。
+    const client = new FakeSheetsClient({ Transactions: [["id"]] });
+
+    await expect(
+      client.updateCells([
+        { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "first" }] },
+        { tab: "Transactions", rowIndex: 2, cells: [{ kind: "string", value: "second" }] },
+      ]),
+    ).rejects.toThrow(/Transactions row 2/);
+
+    expect(await client.readColumns("Transactions", 1)).toEqual([["id"]]);
+  });
+
   it("counts api calls so tests can assert none happen when idle", async () => {
     // Task 9 的「閒置時不打 API」需要這個計數器才能被釘住。
     const client = new FakeSheetsClient({ Transactions: [["id"]] });
