@@ -65,6 +65,14 @@ export interface SheetMirrorDependencies {
    * 通知管道是呼叫端的事。省略時視同不通知（例如尚未接上真正的通知管道）。
    */
   readonly onNeedsAttention?: (state: SheetSyncState) => Promise<void> | void;
+  /**
+   * 覆寫 `RECONCILE_MAX_PAGES`，只給測試用。
+   *
+   * 正常撈兩萬筆才會撞到截斷路徑，測試沒必要（也沒時間）seed 那麼多筆——把這個
+   * 上限做成可注入，測試就能用小值逼出截斷分支。**正式環境永遠不傳這個欄位**，
+   * 用的就是 `RECONCILE_MAX_PAGES` 這個預設值；這裡不是給維運調整用的旋鈕。
+   */
+  readonly reconcileMaxPages?: number;
 }
 
 export type SyncOutcome =
@@ -152,7 +160,15 @@ function laterCursor(current: SyncCursor | null, candidate: SyncCursor): SyncCur
 const NOTIFY_THROTTLE_MS = 10 * 60_000;
 
 export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
-  const { ownerId, sheets, syncRepository, summaryRepository, now, onNeedsAttention } = deps;
+  const {
+    ownerId,
+    sheets,
+    syncRepository,
+    summaryRepository,
+    now,
+    onNeedsAttention,
+    reconcileMaxPages,
+  } = deps;
 
   // 沿用 notify-attention.ts 裁決過的語意：只在通知「送出成功」時才蓋節流時間戳。
   // 送失敗代表使用者根本沒收到，不該因此吃掉接下來十分鐘的靜默窗口。
@@ -324,7 +340,7 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
     // 結果是每次校正都只重驗最舊的那幾筆，永遠到不了其餘資料——被手動改壞的第 500
     // 列永遠不會被修正，而自我修復是這整個設計的賣點（spec §2、§9）。
     let cursor = mode === "reconcile" ? null : persisted;
-    const maxPages = mode === "reconcile" ? RECONCILE_MAX_PAGES : 1;
+    const maxPages = mode === "reconcile" ? (reconcileMaxPages ?? RECONCILE_MAX_PAGES) : 1;
 
     const months = new Set<string>();
     // 校正撈到的所有 id。走完全表才代表它是完整的，才能拿來判斷殭屍列。
@@ -364,6 +380,9 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
         }
       }
 
+      // 帳本是空的（advanced 全程沒被設過）就直接回 idle——清理與 lastReconciledAt
+      // 都不會走到。刻意如此：空帳本上清殭屍列的價值極低，不值得為它多繞一條路徑，
+      // 不是漏寫。
       if (advanced === null) return { kind: "idle" };
 
       if (mode === "reconcile" && scannedToEnd)

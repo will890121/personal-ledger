@@ -54,6 +54,7 @@ function harness(options: {
   changed: MirrorTransaction[];
   sheet?: Record<string, string[][]>;
   state?: Partial<SheetSyncState>;
+  reconcileMaxPages?: number;
 }) {
   const saved: SheetSyncState[] = [];
   const state: SheetSyncState = {
@@ -89,6 +90,10 @@ function harness(options: {
     syncRepository,
     summaryRepository,
     now: () => NOW,
+    // exactOptionalPropertyTypes：只有真的有值才放這個鍵。
+    ...(options.reconcileMaxPages === undefined
+      ? {}
+      : { reconcileMaxPages: options.reconcileMaxPages }),
   });
   return { mirror, sheets, saved, summarize };
 }
@@ -269,5 +274,80 @@ describe("sheet mirror", () => {
     expect(saved[0]?.lastReconciledAt).toBe(NOW.toISOString());
     expect(saved[0]?.cursorUpdatedAt).toBe("2026-12-31T00:00:00.000Z");
     expect(saved[0]?.cursorTransactionId).toBe("t9");
+  });
+});
+
+describe("sheet mirror reconcile truncation guards", () => {
+  // 對照審查員做過的實驗：帳本很大、Sheet 上已經累積了全部既有列（增量同步跑了
+  // 幾個月後的正常狀態），而 RECONCILE_MAX_PAGES 這一輪剛好不夠撈完全表——
+  // 倉儲一直回傳滿滿一批、游標卻不前進（`listChangedTransactions` 忽略游標，
+  // 每次都回同一批，正是 RECONCILE_MAX_PAGES 那段註解說的「資料異常」情境）。
+  //
+  // 兩個守衛要各自守住一件事：截斷時不能清掉 Sheet 上原有的列，也不能蓋
+  // last_reconciled_at——蓋了就等於把一個沒驗完整張表的狀況說成「校正過了」。
+  const FULL_PAGE: MirrorTransaction[] = Array.from({ length: 200 }, (_, i) =>
+    transaction({
+      transactionId: `page-txn-${String(i)}`,
+      updatedAt: `2026-10-05T00:00:00.${String(i).padStart(3, "0")}Z`,
+    }),
+  );
+
+  const EXISTING_ROW = (id: string, amount: string): string[] => [
+    id,
+    String(toSheetSerialDate("2026-01-01")),
+    "",
+    amount,
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "confirmed",
+    "",
+    "2026-01-01T00:00:00.000Z",
+  ];
+
+  function truncatedHarness() {
+    return harness({
+      changed: FULL_PAGE, // 每一頁都是滿的一批，永遠不會觸發「這批不滿」的自然終止。
+      reconcileMaxPages: 1, // 逼出截斷：只給一頁，掃不到下面這些既有列。
+      state: { lastReconciledAt: "2026-09-01T00:00:00.000Z" },
+      sheet: {
+        Transactions: [
+          [...TRANSACTIONS_HEADER],
+          EXISTING_ROW("00000000-0000-4000-8000-000000000001", "500"),
+          EXISTING_ROW("00000000-0000-4000-8000-000000000002", "500"),
+          EXISTING_ROW("00000000-0000-4000-8000-000000000003", "500"),
+        ],
+        Allocations: [[...ALLOCATIONS_HEADER]],
+        MonthlySummary: [[...MONTHLY_SUMMARY_HEADER]],
+      },
+    });
+  }
+
+  it("does not blank pre-existing rows when the page cap truncates the scan", async () => {
+    const { mirror, sheets } = truncatedHarness();
+
+    const outcome = await mirror.reconcile();
+
+    // 截斷之後 outcome 仍然是 synced——這正是危險之處：沒有任何訊號告訴使用者
+    // 這一輪沒驗完整張表。拿掉「截斷時跳過清理」的守衛，下面三列會被清空。
+    expect(outcome.kind).toBe("synced");
+    const rows = sheets.snapshot("Transactions");
+    expect(rows[1]).toEqual(EXISTING_ROW("00000000-0000-4000-8000-000000000001", "500"));
+    expect(rows[2]).toEqual(EXISTING_ROW("00000000-0000-4000-8000-000000000002", "500"));
+    expect(rows[3]).toEqual(EXISTING_ROW("00000000-0000-4000-8000-000000000003", "500"));
+  });
+
+  it("does not stamp last_reconciled_at when the page cap truncates the scan", async () => {
+    const { mirror, saved } = truncatedHarness();
+
+    const outcome = await mirror.reconcile();
+
+    expect(outcome.kind).toBe("synced");
+    expect(saved).toHaveLength(1);
+    // 拿掉「截斷時不蓋 last_reconciled_at」的守衛，這裡會變成 NOW.toISOString()。
+    expect(saved[0]?.lastReconciledAt).toBe("2026-09-01T00:00:00.000Z");
   });
 });
