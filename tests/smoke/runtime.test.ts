@@ -288,6 +288,32 @@ describe("runtime 的 Sheets 鏡像接線", () => {
     }
   });
 
+  it("close() 真的停掉 sheetRunner 的 interval", async () => {
+    // I-2：close() 裡的 sheetRunner?.stop() 沒有被釘住——拿掉那一行，644 條測試
+    // 依然全綠。後果：SIGTERM 之後資料庫關了，但 20 秒的 interval 還活著，
+    // 下一輪 tick 打在已關閉的連線上，而活著的 interval 讓事件迴圈不結束，
+    // 行程永遠不會自然退出（docker stop 只能等到逾時後 SIGKILL）。
+    const runtime = await composeRuntime(
+      configFor(temporaryDirectory("ledger-sheets-close-"), {
+        keyFile: "/nonexistent.json",
+        spreadsheetId: "spreadsheet-1",
+      }),
+      { sheetsClient: permanentlyFailing },
+    );
+
+    vi.useFakeTimers();
+    try {
+      runtime.sheetRunner?.start();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      runtime.close();
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runner 的 logError 是真正的 logger.error", async () => {
     // runner 的 tick 是唯一看得到「同步整輪拋錯」的地方。這裡若傳一個 no-op，
     // 正式環境的同步失敗就哪裡都找不到，而所有測試依然全綠（元件測試注入的是
@@ -353,11 +379,14 @@ describe("runtime 的 Sheets 鏡像接線", () => {
 
       const messages = sent.filter((call) => call.method === "sendMessage");
       expect(messages).toHaveLength(1);
-      const text = (messages[0]?.payload as { text: string }).text;
-      expect(text).toContain("Sheets 鏡像連續失敗");
-      expect(text).toContain("permanent:403");
+      const payload = messages[0]?.payload as { text: string; chat_id: unknown };
+      expect(payload.text).toContain("Sheets 鏡像連續失敗");
+      expect(payload.text).toContain("permanent:403");
       // 錯誤原文不得出現：Google 的訊息會回帶試算表 id。
-      expect(text).not.toContain("spreadsheet-secret-id");
+      expect(payload.text).not.toContain("spreadsheet-secret-id");
+      // I-3：收件人沒被斷言的話，把 chatId 寫死成別的 id 也能全綠——
+      // 使用者看到的後果跟告警完全不會送出一樣：訊息永遠到不了正確的人。
+      expect(payload.chat_id).toBe(OWNER);
     } finally {
       runtime.close();
     }
