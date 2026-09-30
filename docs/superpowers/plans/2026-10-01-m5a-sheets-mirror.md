@@ -2247,6 +2247,30 @@ M4 有一個潛伏 bug 同時存在於真實實作與測試替身裡，因為替
 最後是靠 5 種情境的差分測試才證明兩者語意一致。替身一旦與真實行為漂移，
 所有用替身寫的單元測試就同時失去意義——而且不會有任何一條變紅。
 
+- [ ] **Step 3b: 部署邊界（2026-10-01 追加，Task 10 發現）**
+
+`compose.yaml` 用的是明列式 `environment:`，**兩個新變數沒有被轉發**，而且沒有掛載金鑰檔。
+
+後果比「沒生效」更糟：使用者在 `.env` 裡把兩個變數都設好、重啟，從容器內部看卻是
+**兩個都沒設** → 鏡像靜默關閉。而 Task 10 特地加的「只設一半就拒絕啟動」那個守衛
+**根本不會觸發**，因為在容器的視角裡這是「零設定」而不是「半設定」。
+Review Focus #5 在更上一層原封不動地重演了一次。
+
+要做的：
+
+1. `compose.yaml` 的 `environment:` 加上 `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` 與
+   `SHEET_SPREADSHEET_ID` 兩行轉發。
+2. 金鑰檔以**唯讀**掛載進容器。約定路徑：主機 `./secrets/google-service-account.json`
+   → 容器 `/app/secrets/google-service-account.json`，並讓 `.env` 裡的
+   `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` 指向容器內那個路徑。
+3. `.gitignore` 加 `secrets/`。金鑰絕不能進版控 —— 現在只有 `.env` 被排除。
+4. 驗收文件寫清楚三步設定：GCP 建專案並啟用 Sheets API、建服務帳號下載 JSON 金鑰放到
+   `secrets/`、把試算表分享給服務帳號的 email（編輯權限）。
+
+**注意目前線上容器不是用 compose 起的**（是 `docker run --env-file .env` 手動建的），
+兩條路徑都要能用：compose 檔是 repo 的宣告式記錄，而手動那條是現在實際在跑的。
+驗收文件要說明這件事。
+
 - [ ] **Step 4: 文件**
 
 `docs/quality/m5a-acceptance.md`：三道關卡（自動驗證、程式審查、人工驗收）。
