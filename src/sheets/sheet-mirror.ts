@@ -7,6 +7,7 @@ import {
   transactionRow,
 } from "../domain/sheet-rows.js";
 import { fromSheetSerialDate } from "../domain/sheet-serial-date.js";
+import { logger } from "../logger.js";
 import type {
   MirrorTransaction,
   SheetSyncRepository,
@@ -410,15 +411,37 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
       // 不是漏寫。
       if (advanced === null) return { kind: "idle" };
 
-      if (mode === "reconcile" && scannedToEnd)
-        await clearGhostRows({
-          transactions: knownTransactionIds,
-          allocations: knownAllocationIds,
-        });
+      if (mode === "reconcile") {
+        if (scannedToEnd) {
+          await clearGhostRows({
+            transactions: knownTransactionIds,
+            allocations: knownAllocationIds,
+          });
+        } else {
+          // 被 RECONCILE_MAX_PAGES 這個保險絲截斷：這一輪沒有驗完整張表，
+          // 有些列今天沒被重新檢查過。唯一既有的訊號是 lastReconciledAt 停止
+          // 前進——一種沒人會主動去看的沉默訊號。這裡補一行主動的 warn，
+          // 讓事後（docker logs）能看出「發生過截斷」，而不必先猜到要去
+          // 翻 sheet_sync_state。
+          logger.warn("sheet mirror reconcile truncated by page cap; some rows not verified", {
+            pages: maxPages,
+            transactions,
+          });
+        }
+      }
 
       // 游標只前進不後退：校正這一輪的最後一筆可能比持久游標還舊。
       const nextCursor = laterCursor(persisted, advanced);
       const nowIso = now().toISOString();
+      if (state.consecutiveFailures > 0) {
+        // 上一次存的狀態還帶著失敗計數，這一輪成功了——這正是「恢復」，
+        // 而不是單純的又一次成功。/status 只顯示「當下」，事故的起訖點只有
+        // 日誌留得住。
+        logger.info("sheet mirror recovered from failure", {
+          mode,
+          previousConsecutiveFailures: state.consecutiveFailures,
+        });
+      }
       // 只有寫入成功才存狀態。失敗仍存＝那批變更被永久跳過，而且沒有任何東西會發現。
       await syncRepository.saveSyncState({
         ownerId,
@@ -441,9 +464,19 @@ export function createSheetMirror(deps: SheetMirrorDependencies): SheetMirror {
         consecutiveFailures: state.consecutiveFailures + 1,
       };
       await syncRepository.saveSyncState(failedState);
+      // lastError 只是「分類:狀態碼」（例如 "transient:503"），不是原始錯誤訊息——
+      // describeSheetFailure 已經把可能夾帶試算表 id 的訊息本文擋掉了。
+      logger.info("sheet mirror sync failed; will retry", {
+        mode,
+        consecutiveFailures: failedState.consecutiveFailures,
+        lastError: failedState.lastError,
+      });
       // 達到門檻才升級：偶發的暫時性錯誤（下一輪 tick 就會自己好）不值得驚動人，
       // 連續失敗到一定次數才代表這不是暫時性的。
       if (failedState.consecutiveFailures >= ESCALATE_AFTER_FAILURES) {
+        logger.warn("sheet mirror consecutive failures escalated", {
+          consecutiveFailures: failedState.consecutiveFailures,
+        });
         await notifyNeedsAttention(failedState);
       }
       return { kind: "failed", error };

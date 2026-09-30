@@ -193,6 +193,11 @@ async function handleDeliveryFailure(
         leaseToken,
       ),
     );
+    logger.warn("outbox delivery abandoned; moved to needs_attention", {
+      messageId: message.messageId,
+      attempts: message.attempts,
+      error,
+    });
     await notifyIfOwned(owned, message, deps);
     return "needs_attention";
   }
@@ -208,6 +213,11 @@ async function handleDeliveryFailure(
         leaseToken,
       ),
     );
+    logger.warn("outbox exhausted its retry cap; moved to needs_attention", {
+      messageId: message.messageId,
+      attempts,
+      error,
+    });
     await notifyIfOwned(owned, message, deps);
     return "needs_attention";
   }
@@ -223,6 +233,12 @@ async function handleDeliveryFailure(
       leaseToken,
     ),
   );
+  logger.info("outbox delivery failed; backoff scheduled", {
+    messageId: message.messageId,
+    attempts,
+    delayMs,
+    error,
+  });
   return "retrying";
 }
 

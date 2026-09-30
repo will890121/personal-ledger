@@ -1,4 +1,5 @@
 import type { OutboxMessage } from "../domain/outbox.js";
+import { logger } from "../logger.js";
 import type { LedgerRepository } from "../ports/ledger-repository.js";
 
 /**
@@ -52,8 +53,15 @@ export function createAttentionNotifier(
 
     try {
       await deps.api.sendMessage(message.chatId, ALERT_TEXT);
-    } catch {
+    } catch (error) {
       // 吞掉：見檔頭說明。這一列已經被標成 needs_attention，/status 會顯示。
+      // 但吞掉不等於沒發生過——這是全專案最安靜的失敗路徑，記一行讓事後能
+      // 從 docker logs 看出告警確實沒送到，而不是誤以為使用者當時有收到通知。
+      logger.warn("notify-attention failed to send its own alert", {
+        messageId: message.messageId,
+        chatId: message.chatId,
+        error,
+      });
       return;
     }
     await deps.repository.setSetting(deps.ownerId, ALERT_SETTING_KEY, now.toISOString());
