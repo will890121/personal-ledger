@@ -492,7 +492,7 @@ describe("listChangedTransactions", () => {
   });
 
   it("includes the row sitting exactly on the cursor", async () => {
-    // 游標語意是 >= 而不是 >。重寫邊界那一列是冪等的、代價為零；
+    // 2026-10-01 更正：游標語意改為 tuple 上的嚴格 >。理由見 spec §3 ——
     // 而用 > 的話，下面那條同毫秒的測試會永久漏掉一筆。
     seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
 
@@ -1769,6 +1769,12 @@ describe("convergence", () => {
     // 游標設在它之後，跑 syncOnce() 不會處理它，跑 reconcile() 會。
   });
 
+  it("clears a transactions row whose id no longer exists in sqlite", async () => {
+    // 與配置列同一種結構性缺口，但在 Transactions 分頁上。
+    // 另外：鍵欄若出現重複的 id，目前是後寫獲勝、較早那一列成為永久的殭屍列。
+    // 兩者都要在校正時清掉，否則「Sheet 是 SQLite 的投影」這個不變量不成立。
+  });
+
   it("clears an allocation row whose allocation no longer exists", async () => {
     // 2026-10-01 補（Task 6 實作者發現的缺口）。updateTransaction 是
     // 「DELETE 全部配置再 INSERT」，所以改一筆交易之後舊的 allocation_id 就永遠消失了。
@@ -1798,8 +1804,24 @@ describe("convergence", () => {
 > **游標只能前進**：存檔前與現有游標比較，取較晚的那一個。Task 6 已實作 `laterCursor()`，
 > 在增量路徑上是 no-op。
 
-`reconcile` 的批次上限與 `syncOnce` 相同（`SYNC_BATCH`）。資料量超過一批時，
-一次 `reconcile` 只處理一批，游標推進，下一輪繼續 —— 校正是漸進的，不需要一次掃完。
+**`reconcile` 必須在一次呼叫內自己分頁，用自己的區域游標。**
+
+> **2026-10-01 更正。** 這裡原本寫「一次只處理一批，游標推進，下一輪繼續」——
+> 那句話在 `laterCursor` 之後是**假的**，兩者直接矛盾。
+
+問題：`reconcile` 傳 `cursor = null`，查詢永遠回傳**最舊**的 `SYNC_BATCH` 筆；
+`laterCursor` 又會把這一批的推進丟掉（持久游標已經在前面）。結果是每次校正都只重驗最舊的
+200 筆，**永遠到不了其餘資料**。Task 6 審查實測 250 筆交易連跑五次 `reconcile`：
+每次都停在 `cursor=t0199`、Sheet 上 200 列，而 `reconcile` 仍回報 `synced`。
+
+這會殺掉自我修復，而自我修復是這整個設計的賣點（spec §2、§9）：被手動改壞的第 500 列
+永遠不會被修正。
+
+做法：`reconcile()` 用一個**區域**游標在一次呼叫內往前分頁，直到查詢回傳少於 `SYNC_BATCH`
+筆為止，並加一個迭代上限當保險。持久游標仍然只透過 `laterCursor` 前進。
+
+**必須有一條跨越 `SYNC_BATCH` 邊界的測試**：用比 `SYNC_BATCH` 多的交易跑一次 `reconcile`，
+斷言最後一筆也出現在 Sheet 上。沒有這條測試，這個洞會再一次全綠出貨。
 
 - [ ] **Step 3: 跑測試、完整檢查、提交**
 
@@ -2018,6 +2040,13 @@ it.each([
 `userEnteredFormat.numberFormat = { type: "DATE" }`）。
 
 **不得使用 `valueInputOption: USER_ENTERED`**（spec §4：公式注入）。
+
+**`readColumns` 必須帶 `valueRenderOption: "UNFORMATTED_VALUE"`，這不是可選的。**
+Google 的 `values.get` 預設是 `FORMATTED_VALUE`，日期欄會回傳 `"2026/9/28"` 這類字串；
+引擎對那一欄做的是 `Number(raw)`，於是得到 NaN、舊日期被靜默丟棄，
+**跨月搬移的舊月份摘要永遠不會被重算（Review Focus #1 直接失效），而所有測試依然全綠**
+——因為測試替身存的是序列值。Task 6 的審查已用探針實測確認這條路徑。
+`src/ports/sheets-client.ts` 的文件註解也要寫明「日期欄回傳的必須是未格式化的序列值」。
 
 - [ ] **Step 4: 接線**
 
