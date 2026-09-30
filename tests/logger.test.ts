@@ -91,6 +91,49 @@ describe("logger", () => {
     expect(lines.join("\n")).toContain("message is not modified");
   });
 
+  // I4：error 這個鍵名原本是唯一明確跳過遮罩的路徑——describeError 的結果直接寫出去，
+  // 沒有再過一次 redactString。它也正是最可能被未來的呼叫端塞進髒東西的鍵名。
+  describe("the error key goes through redaction too (I4)", () => {
+    const FAKE_TOKEN = "123456789:AAHexampleFakeToken_ForRedactionTestOnly12-End";
+
+    it("redacts a bot token inside a plain Error's message", () => {
+      const { logger, lines } = capture();
+
+      logger.error("boom", { error: new Error(`failed calling bot${FAKE_TOKEN}/sendMessage`) });
+
+      const output = lines.join("\n");
+      expect(output).not.toContain("AAHexampleFakeToken_ForRedactionTestOnly12-End");
+      expect(output).toContain("***");
+    });
+
+    it("redacts a bot token inside a GrammyError's description", () => {
+      const { logger, lines } = capture();
+
+      logger.error("boom", { error: grammyError(400, `Bad Request: ${FAKE_TOKEN} rejected`) });
+
+      const output = lines.join("\n");
+      expect(output).not.toContain("AAHexampleFakeToken_ForRedactionTestOnly12-End");
+      expect(output).toContain("***");
+    });
+
+    it("never prints the message of an error this project did not throw itself", () => {
+      // 財務原文沒有可偵測的值樣式，擋住它的是 describeError 的啟發式：只有本專案
+      // 自己以固定字串丟出的 Error（name === "Error"）才連訊息一起記錄，ZodError／
+      // SqliteError 之類只留類別名稱。ZodError 會把使用者輸入的實際值回填進 issues
+      // 與 message，所以這條路徑必須是裸的類別名稱。
+      const error = Object.assign(new Error("invalid input: 午餐 120 統一超商"), {
+        name: "ZodError",
+      });
+      const { logger, lines } = capture();
+
+      logger.error("解析失敗", { error });
+
+      const output = lines.join("\n");
+      expect(output).toContain("ZodError");
+      expect(output).not.toContain("午餐 120 統一超商");
+    });
+  });
+
   // Finding 1：拒絕清單裡的六個欄位名各自獨立測試——用同一個 Set.has() 實作
   // 不代表每個名字都真的被蓋到；拿掉清單裡任何一個名字，都要有一個測試因此
   // 失敗，而不是只有 rawText 被測到、其他五個名字形同虛設。

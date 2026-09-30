@@ -108,7 +108,11 @@ function redactObjectFields(
       continue;
     }
     if (key === "error") {
-      redacted[key] = describeError(value);
+      // describeError 的結果要再走一次一般的字串遮罩：它挑出來的 message／
+      // description 一樣可能夾帶 bot token（例如 grammY 把請求 URL 放進訊息裡）。
+      // 「單一出口負責遮罩」的意思就是連這條捷徑也不能跳過遮罩——error 正是最可能
+      // 被未來的呼叫端塞進髒東西的鍵名。
+      redacted[key] = redactValue(describeError(value), depth + 1, ancestors);
       continue;
     }
     redacted[key] = redactValue(value, depth + 1, ancestors);
