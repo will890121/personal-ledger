@@ -11,6 +11,7 @@ const migrations = [
   { version: 6, url: new URL("./migrations/0006_dining_category.sql", import.meta.url) },
   { version: 7, url: new URL("./migrations/0007_user_category_keywords.sql", import.meta.url) },
   { version: 8, url: new URL("./migrations/0008_outbox.sql", import.meta.url) },
+  { version: 9, url: new URL("./migrations/0009_sheet_sync_state.sql", import.meta.url) },
 ] as const;
 
 // /status 顯示「schema 版本」讓使用者（其實是開發者自己）確認正式環境跑的是哪一版

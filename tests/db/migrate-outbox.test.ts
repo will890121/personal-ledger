@@ -72,6 +72,6 @@ describe("migration 0008", () => {
           version: number;
         }[]
       ).map((row) => row.version),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 });

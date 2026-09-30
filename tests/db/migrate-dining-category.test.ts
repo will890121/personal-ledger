@@ -88,6 +88,7 @@ describe("migration 0006", () => {
       { version: 6 },
       { version: 7 },
       { version: 8 },
+      { version: 9 },
     ]);
   });
 });

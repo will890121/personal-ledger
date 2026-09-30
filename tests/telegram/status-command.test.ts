@@ -64,7 +64,7 @@ describe("/status", () => {
 
     const text = getText(calls.at(-1)) ?? "";
     expect(text).toContain("待送 0 筆");
-    expect(text).toContain("schema 版本：8");
+    expect(text).toContain("schema 版本：9");
   });
 
   it("lists what is stuck and offers a way back", async () => {

@@ -81,6 +81,7 @@ describe("runtime composition", () => {
         { version: 6 },
         { version: 7 },
         { version: 8 },
+        { version: 9 },
       ]);
     } finally {
       runtime.close();
@@ -147,6 +148,7 @@ describe("runtime composition", () => {
         { version: 6 },
         { version: 7 },
         { version: 8 },
+        { version: 9 },
       ]);
       categoryCount = (
         runtime.database
