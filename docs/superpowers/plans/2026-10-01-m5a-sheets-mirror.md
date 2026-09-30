@@ -2080,6 +2080,14 @@ Task 7 的審查發現：**`src/` 裡沒有任何程式會寫標題列。** `TRA
 非 null 才建立，並在 `outboxRunner.start()` 之後 `sheetRunner.start()`，
 `close()` 裡一併 `stop()`。
 
+**同時把 runner 的 `logError` 接上真正的 logger。** Task 9 的 runner 不能 import
+`src/logger.ts`（那個檔案 import grammY，而 `src/sheets/` 不得依賴 grammY），所以它改成
+注入一個窄介面 `logError(message, fields?)`。**接線時必須把 `logger.error` 傳進去，
+否則正式環境的同步失敗完全不會被記錄** —— 而且測試全綠，因為測試傳的是自己的假函式。
+
+要有測試釘住這件事：把 `main.ts` 傳進去的那個函式換成 no-op，必須有測試變紅。
+這正是 M4 的 AC-24 踩過的坑 —— 元件測試全綠，但沒有人問過「`main.ts` 有沒有真的接上」。
+
 **同時把 Task 8 的升級接到 Telegram。** Task 8 只定義了注入點
 `onNeedsAttention(state)`，真正送出通知是在這裡接的：沿用 `src/telegram/notify-attention.ts`
 的形狀（best-effort、自己失敗就吞掉並記一行、節流鍵只在送出成功時寫入），
