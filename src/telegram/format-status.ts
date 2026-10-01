@@ -51,12 +51,21 @@ function formatSheetsSection(
 
   // 「從未同步過」與「從未完整校正過」都必須跟啟用中的健康畫面長得不一樣——
   // 不能印成空白或看起來像時間的東西，否則會被誤讀成「剛剛才同步過」。
+  //
+  // 兩個時間戳都走同一個格式化函式，而且都帶日期。曾經只有「最後完整校正」帶日期，
+  // 「最後成功同步」只印時分——2026-10-01 的人工驗收踩到那個情境：14 小時前的同步
+  // 顯示成「11:19」，看起來像剛剛才同步過。`lastSuccessAt` 只在真的寫入時才更新
+  // （閒置的 tick 在碰任何東西之前就早退，那是配額設計的基礎），所以「沒有新帳所以
+  // 沒動」與「壞掉很久了」會長得一模一樣，而分辨這兩者正是 /status 存在的理由。
+  // 兩處各自格式化同一種東西，就是它們當初漂移的原因，所以收成一個函式。
+  const absoluteTime = (iso: string): string => {
+    const at = new Date(iso);
+    return `${dateOf(at)} ${timeOfDay(at)}`;
+  };
   const lastSync =
-    sheets.lastSuccessAt === null ? "從未同步過" : timeOfDay(new Date(sheets.lastSuccessAt));
+    sheets.lastSuccessAt === null ? "從未同步過" : absoluteTime(sheets.lastSuccessAt);
   const lastReconciled =
-    sheets.lastReconciledAt === null
-      ? "從未完整校正過"
-      : `${dateOf(new Date(sheets.lastReconciledAt))} ${timeOfDay(new Date(sheets.lastReconciledAt))}`;
+    sheets.lastReconciledAt === null ? "從未完整校正過" : absoluteTime(sheets.lastReconciledAt);
   const backlogText = `${String(sheets.backlog)}${sheets.backlogAtLimit ? "+" : ""} 筆`;
 
   return [

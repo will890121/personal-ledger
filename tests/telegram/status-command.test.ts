@@ -203,7 +203,11 @@ describe("/status 的 Sheets 區段", () => {
     const text = getText(calls.at(-1)) ?? "";
     // 拿掉任何一個 toContain 都必須讓對應的欄位在實作裡也不見了才會變紅——
     // 每一行都是這個健康情境獨有的字面值，不會被其他情境的斷言誤打中。
-    expect(text).toContain("最後成功同步：07:50");
+    // 「最後成功同步」必須跟「最後完整校正」一樣帶日期。lastSuccessAt 只在真的寫入時
+    // 才更新（閒置的 tick 在碰任何東西之前就早退了），所以它很可能是好幾小時甚至好幾天前
+    // ——光印時分會讓「沒有新帳所以沒動」跟「壞掉很久了」長得一模一樣，而分辨這兩者
+    // 正是 /status 存在的全部理由。2026-10-01 的人工驗收就踩到這個情境。
+    expect(text).toContain("最後成功同步：2026-09-30 07:50");
     expect(text).toContain("落後：7 筆");
     expect(text).toContain("連續失敗：3 次");
     expect(text).toContain("最後錯誤：permanent:403");
