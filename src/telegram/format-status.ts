@@ -135,16 +135,23 @@ export function formatStatus(
   }
   lines.push(...formatSheetsSection(sheets, timeOfDay, dateOf));
 
-  const keyboard: InlineKeyboardButton[][] = [
-    // 空佇列時按下去只會是個沒有效果的按鈕，容易讓人誤以為「按了才會重試」；
-    // 只有真的有 needs_attention 時才出現。
-    ...(summary.needsAttention > 0 ? [[{ text: "重試全部", callback_data: "outbox-retry" }]] : []),
-    // 與其他五支清單指令一致，最後一列固定是關閉清單。
-    [{ text: "關閉清單", callback_data: "dismiss-status" }],
-  ];
+  // `/status` 是**報表**，不是清單：沒有分頁、沒有項目、沒有逐項操作，只是一份狀態快照。
+  // 因此它沒有「關閉清單」，也不套用「只保留最後一份清單」的規則——過期的報表就像對話裡
+  // 任何一則舊訊息，留著無害。`/today`、`/month` 同屬報表，從一開始就是零按鈕。
+  //
+  // 這裡曾經有一顆「關閉清單」，理由寫的是「與其他五支清單指令一致」。那個一致性套在錯的
+  // 分類上：清單的按鈕綁特定項目的 id，過期的清單按下去會動到錯的東西，所以才需要關閉鍵與
+  // 單一清單規則；報表沒有這個問題。
+  //
+  // 唯一的例外是「重試全部」，而它是條件式的：空佇列時按下去只會是個沒有效果的按鈕，
+  // 容易讓人誤以為「按了才會重試」，所以只有真的有 needs_attention 時才出現。
+  // 它讀的是當下的狀態、而且重試是冪等的，所以在一份過期的報表上按它最壞只是沒有效果。
+  const keyboard: InlineKeyboardButton[][] =
+    summary.needsAttention > 0 ? [[{ text: "重試全部", callback_data: "outbox-retry" }]] : [];
 
   return {
     text: lines.join("\n"),
-    replyMarkup: { inline_keyboard: keyboard },
+    // 沒有按鈕時不要附空的 inline_keyboard：Telegram 會留一塊空白的鍵盤區域。
+    ...(keyboard.length > 0 ? { replyMarkup: { inline_keyboard: keyboard } } : {}),
   };
 }

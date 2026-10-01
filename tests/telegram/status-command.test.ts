@@ -75,9 +75,25 @@ describe("/status", () => {
 
     const payload = JSON.stringify(calls.at(-1)?.payload);
     expect(getText(calls.at(-1))).toContain("待處理 1 筆");
-    // 與其他五支清單指令一致。
     expect(payload).toContain('"text":"重試全部"');
-    expect(payload).toContain('"text":"關閉清單"');
+    // 2026-10-02 更正：`/status` 是**報表**不是清單，不該有「關閉清單」。
+    // 原本這裡的註解寫「與其他五支清單指令一致」——那個一致性套在錯的分類上：
+    // /status 沒有分頁、沒有項目、沒有逐項操作，它是一份狀態快照。
+    // /today 與 /month 同屬報表，從一開始就是零按鈕，那才是對的樣子。
+    expect(payload).not.toContain("關閉清單");
+    expect(payload).not.toContain("dismiss-status");
+  });
+
+  it("健康狀態下整份報表零按鈕", async () => {
+    // 重試全部是條件式的（只有 needsAttention > 0 才出現），關閉清單已移除，
+    // 所以沒有卡住的訊息時不該有任何按鈕。報表沒有附加操作。
+    const { bot, calls } = harness();
+
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "/status" }));
+
+    const payload = JSON.stringify(calls.at(-1)?.payload);
+    expect(payload).not.toContain("inline_keyboard");
+    expect(payload).not.toContain("callback_data");
   });
 
   it("puts stuck messages back in the queue and drains them", async () => {

@@ -83,9 +83,4 @@ export function registerStatusHandlers(bot: Bot, dependencies: LedgerBotDependen
       ...(view.replyMarkup ? { reply_markup: view.replyMarkup } : {}),
     });
   });
-
-  bot.callbackQuery("dismiss-status", async (context) => {
-    await context.answerCallbackQuery();
-    await context.deleteMessage();
-  });
 }
