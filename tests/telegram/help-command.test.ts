@@ -30,7 +30,9 @@ describe("/help", () => {
     ["date prefix", "昨天 Uber 245 國泰卡"],
     ["equal split", "午餐 1000，三個人平分"],
     ["repayment", "小明還 300"],
-    ["multiple entries in one message", "午餐 120，Uber 245"],
+    // 2026-10-02：分隔符改成只有換行。/help 必須教換行，否則它會教一個已經不成立的
+    // 寫法——使用者照著打「午餐 120，Uber 245」只會得到一張缺金額的草稿。
+    ["multiple entries in one message", "一次多筆（換行分隔，一行一筆）"],
   ])("mentions the %s syntax via `%s`", (_label, example) => {
     expect(formatHelp()).toContain(example);
   });

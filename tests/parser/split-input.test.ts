@@ -3,51 +3,51 @@ import { describe, expect, it } from "vitest";
 import { splitInput } from "../../src/parser/split-input.js";
 
 describe("splitInput", () => {
-  it("splits on separators when each segment carries an amount", () => {
-    expect(splitInput("午餐 120，咖啡 60")).toEqual(["午餐 120", "咖啡 60"]);
+  it("只用換行分隔，一行一筆", () => {
+    expect(splitInput("午餐 120\n咖啡 60")).toEqual(["午餐 120", "咖啡 60"]);
   });
 
-  it("merges segments without an amount into the previous segment", () => {
+  it("半形逗號不是分隔符——千分位金額必須保持完整", () => {
+    // 2026-10-02 的人工驗收發現：`,` 曾經是分隔符，於是「薪水 +85,000」被拆成
+    // 「薪水 +85」與「000」兩筆，兩筆都是看起來合法的輸入、不會報錯。
+    // 千分位是記帳時會自然打出來的寫法，這比任何邊角案例都重要。
+    expect(splitInput("薪水 +85,000")).toEqual(["薪水 +85,000"]);
+    expect(splitInput("晚餐 1,250")).toEqual(["晚餐 1,250"]);
+  });
+
+  it("全形逗號不是分隔符——分帳寫在同一行", () => {
+    // `，` 以前同時代表「這是同一筆的分帳明細」與「這是下一筆交易」兩種相反的意思，
+    // 靠一組啟發式在事後猜回來。改成換行之後這個歧義在輸入時就消失了。
+    expect(splitInput("午餐 1260，小明欠 630")).toEqual(["午餐 1260，小明欠 630"]);
+    expect(splitInput("午餐 1260，幫小華付 500")).toEqual(["午餐 1260，幫小華付 500"]);
     expect(splitInput("聚餐 1260，我先付，朋友欠一半")).toEqual(["聚餐 1260，我先付，朋友欠一半"]);
   });
 
-  it("merges a leading segment without an amount into the next segment", () => {
-    expect(splitInput("我先付，聚餐 1260")).toEqual(["我先付，聚餐 1260"]);
+  it("頓號不是分隔符", () => {
+    expect(splitInput("咖啡 60、晚餐 300")).toEqual(["咖啡 60、晚餐 300"]);
   });
 
-  it("keeps existing transfer syntax as a single segment", () => {
+  it("不含金額的括號內容不會被切開", () => {
+    // 這是觸發整個調查的輸入。備註裡的逗號不該有任何結構意義。
+    expect(splitInput("咖啡 60 備註 =SUM(1,1)")).toEqual(["咖啡 60 備註 =SUM(1,1)"]);
+  });
+
+  it("轉帳語法維持單一段落", () => {
     expect(splitInput("台新轉國泰 1000 手續費 15")).toEqual(["台新轉國泰 1000 手續費 15"]);
   });
 
-  it("splits on newlines and ideographic commas", () => {
-    expect(splitInput("午餐 120\n咖啡 60、晚餐 300")).toEqual(["午餐 120", "咖啡 60", "晚餐 300"]);
-  });
-
-  it("ignores empty segments and whitespace", () => {
-    expect(splitInput("  午餐 120，，  ")).toEqual(["午餐 120"]);
+  it("忽略空行與前後空白", () => {
+    expect(splitInput("  午餐 120\n\n  ")).toEqual(["午餐 120"]);
     expect(splitInput("   ")).toEqual([]);
+    expect(splitInput("\n\n")).toEqual([]);
   });
 
-  it("merges a pure owed-amount clause into the previous segment despite carrying a number", () => {
-    expect(splitInput("午餐 1260，小明欠 630")).toEqual(["午餐 1260，小明欠 630"]);
-  });
-
-  it("merges a pure pays-for-someone clause into the previous segment despite carrying a number", () => {
-    expect(splitInput("午餐 1260，幫小華付 500")).toEqual(["午餐 1260，幫小華付 500"]);
-  });
-
-  it("still splits two ordinary amount-bearing transactions", () => {
-    expect(splitInput("午餐 120，咖啡 60")).toEqual(["午餐 120", "咖啡 60"]);
-  });
-
-  it("still merges a name-only sharing clause without an amount", () => {
-    expect(splitInput("聚餐 1260，我先付，朋友欠一半")).toEqual(["聚餐 1260，我先付，朋友欠一半"]);
-  });
-
-  it("does not merge a segment that owes an amount but also carries other content", () => {
-    expect(splitInput("午餐 120，小明欠 630 加小費 50")).toEqual([
-      "午餐 120",
-      "小明欠 630 加小費 50",
-    ]);
+  it("照字面執行分隔符，不再事後猜測", () => {
+    // 刻意不保留「這一段沒有金額就併回上一段」與「這一段是純欠款子句就併回上一段」
+    // 這兩個啟發式：使用者既然換行了，就是明確說「這是分開的」，再去推翻它等於把
+    // 剛拿掉的猜測搬到另一個地方。兩種情形都會產生看得見的草稿（缺欄位、可取消），
+    // 不會產生錯的帳。
+    expect(splitInput("午餐 120\n國泰卡")).toEqual(["午餐 120", "國泰卡"]);
+    expect(splitInput("午餐 1260\n小明欠 630")).toEqual(["午餐 1260", "小明欠 630"]);
   });
 });
