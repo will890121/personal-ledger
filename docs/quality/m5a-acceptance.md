@@ -139,27 +139,35 @@ Telegram 會收到「⚠️ Sheets 鏡像連續失敗」。
   這個 shell**：
 
   ```bash
-  set -a; . ./.env; set +a
-  GOOGLE_SERVICE_ACCOUNT_KEY_FILE=./secrets/google-service-account.json \
-  SHEETS_TEST_SPREADSHEET_ID=<拋棄式試算表 id> \
-    pnpm test:sheets
+  docker run --rm \
+    --env-file .env \
+    -e SHEETS_TEST_SPREADSHEET_ID=<拋棄式試算表 id> \
+    -v "$PWD":/app \
+    -v "$PWD/secrets":/app/secrets:ro \
+    -v personal-ledger-modules:/app/node_modules \
+    -w /app personal-ledger:deps pnpm test:sheets
   ```
 
-  **`set -a; . ./.env; set +a` 這一行不能省。** 專案裡沒有任何東西會載入 `.env`
-  （沒有 dotenv）；下面這條測試唯一防止清空正式試算表的保護——
-  `SHEETS_TEST_SPREADSHEET_ID` 等於正式的 `SHEET_SPREADSHEET_ID` 時拒絕執行——
-  比對的是**這個 shell 裡**的兩個環境變數。少了這一行，`SHEET_SPREADSHEET_ID`
-  根本不在這個 shell 裡，守衛看不到正式 id、永遠不會開火：如果為了省事把正式 id
-  複製到 `SHEETS_TEST_SPREADSHEET_ID`（例如直接抄第 3 步剛填過的值），流程會直接
-  清空並重寫三張真實分頁，中間不會有任何提示，而且無法還原。測試本身在真正動手
-  清空之前也會印出它要清空的試算表 id；如果 `SHEET_SPREADSHEET_ID` 這時仍未設定
-  （因此測試無法替你比對），它會另外大聲印出「我無法確認這不是你的正式試算表」——
-  看到這行就代表上面的載入沒生效，該中止。
+  > **2026-10-02 更正。** 這裡原本寫的是在主機上直接跑
+  > `set -a; . ./.env; set +a` 加 `pnpm test:sheets`，**而那條指令跑不起來**——
+  > 這台機器沒有 node 也沒有 pnpm（本專案所有指令都在 Docker 裡跑，見「全域限制」）。
+  > 人工驗收時發現並改成上面的 Docker 形式。
 
-  上面這行金鑰路徑用的是**主機**路徑（`./secrets/...`），跟第 3 步 `.env` 裡寫的
-  容器內路徑（`/app/secrets/...`）不一樣：那一份 `.env` 給的是**跑在容器裡的 bot**
-  用的路徑，這裡假設你是在主機上直接執行 `pnpm test:sheets`，兩者的檔案系統基準點
-  不同，各自對才是對的——不要把其中一種路徑抄到另一個情境裡。
+  **`--env-file .env` 不能省，而且它同時解決了安全問題。** 這條測試唯一防止清空正式
+  試算表的保護，是「`SHEETS_TEST_SPREADSHEET_ID` 等於正式的 `SHEET_SPREADSHEET_ID`
+  時拒絕執行」——而它比對的是**容器裡**的兩個環境變數。`--env-file .env` 會把正式的
+  `SHEET_SPREADSHEET_ID` 一併帶進去，守衛自動就看得到。
+
+  少了它，守衛看不到正式 id、永遠不會開火：如果為了省事把正式 id 複製到
+  `SHEETS_TEST_SPREADSHEET_ID`（例如直接抄第 3 步剛填過的值），流程會直接清空並重寫
+  三張真實分頁，無法還原。測試在真正動手之前會印出它要清空的試算表 id；若此時
+  `SHEET_SPREADSHEET_ID` 不在環境裡（因此無法替你比對），它會另外大聲印出
+  **「我無法確認這不是你的正式試算表」**——看到這行就代表 `--env-file` 沒生效，該中止。
+
+  金鑰路徑不需要另外指定：`.env` 裡寫的 `/app/secrets/google-service-account.json`
+  是**容器內**路徑，而上面的指令已經把主機的 `./secrets` 唯讀掛到 `/app/secrets`，
+  所以同一個值在這裡就是對的。（這也是改用 Docker 形式的附帶好處：以前主機路徑與
+  容器路徑兩套並存，容易抄錯。）
 
   結案前必須看到它 exit 0。
 - **AC-21（Sheet 暫時失敗 → 正式入帳成功，Sheet 工作安全重試）**：
