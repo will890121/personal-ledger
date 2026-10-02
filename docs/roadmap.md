@@ -274,12 +274,11 @@ Google Sheets 鏡像已啟用並正在同步。
 
 在那之前值得注意的幾件事：
 
-0. **`tests/startup.test.ts` 的 `beforeAll` 會在負載高時逾時**，而它與程式對錯無關。
-   那個 hook 跑一次完整 `pnpm build`，vitest 預設只給 10 秒；M5a 驗收期間它紅了三次、
-   連 `docker build` 內的測試階段也中過一次。**一個會因為與程式無關的理由變紅的測試，
-   會訓練人忽略紅燈** —— 而這個專案花了兩個里程碑建立「紅燈代表真的有問題」這個約定。
-   修法要選：把 hook 逾時拉長（簡單，但會掩蓋真正變慢的情況），或讓它不要在 hook 裡
-   跑 build（更對，要改測試結構）。M5b 會動到 `scripts/` 與維護 CLI，是處理它的自然時機。
+0. ~~`tests/startup.test.ts` 的建置 hook 會在負載高時逾時~~ —— **2026-10-03 已修**。
+   那個 hook 跑一次完整 `pnpm build`，而 vitest 預設只給 10 秒；M5a 驗收期間它紅了四次、
+   連 `docker build` 內的測試階段也中過一次，每一次都與程式對錯無關。逾時放寬到 180 秒。
+   放寬不掩蓋「建置真的變慢」：`pnpm check` 鏈裡的 `pnpm build` 本來就獨立跑一次而且
+   沒有逾時 —— 那 10 秒從來不是效能守衛。
 
 1. 備份已經有可用、已實測的腳本（`scripts/backup.sh`，`VACUUM INTO` + `integrity_check` +
    保留政策），migration 前也已經自動快照（`src/db/pre-migration-snapshot.ts`）。還缺的是
