@@ -10,12 +10,23 @@ interface PackageJson {
   scripts: Record<string, string>;
 }
 
+// 這個 hook 會跑一次完整的 TypeScript 建置，而 vitest 的 hook 預設逾時是 10 秒 ——
+// 在主機忙碌時（例如同時有幾個 docker build 在跑）根本跑不完，於是整個檔案以
+// `Hook timed out in 10000ms` 失敗。M5a 驗收期間它這樣紅了四次，每一次都與程式對錯無關。
+//
+// **一個會因為與程式無關的理由變紅的測試，會訓練人忽略紅燈** —— 而紅燈代表真的有問題
+// 這個約定，是這個專案花了兩個里程碑建立起來的，不值得為一個訂得太緊的期限消耗掉。
+//
+// 把逾時拉長不會掩蓋「建置真的變慢」：那一步在 `pnpm check` 鏈裡本來就會以
+// `pnpm build` 獨立跑一次，而那一次沒有逾時。這裡的 10 秒從來不是效能守衛。
+const BUILD_HOOK_TIMEOUT_MS = 180_000;
+
 describe("production startup", () => {
   beforeAll(() => {
     execFileSync("pnpm", ["build"], {
       cwd: projectRoot,
     });
-  });
+  }, BUILD_HOOK_TIMEOUT_MS);
 
   it("packages every database migration", () => {
     expect(

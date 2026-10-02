@@ -36,26 +36,36 @@ export const parserCorpus: readonly CorpusCase[] = [
   { input: "Uber 245", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
   { input: "昨天 午餐 120", segments: 1, outcomes: ["draft"], allocationCounts: [1] },
 
-  // M3a 批次
+  // 2026-10-02：分隔符改成只有換行之後，舊習慣的全形逗號會變成**一段**。
+  // 保留這幾條語料是為了釘住「行為改變之後它怎麼失敗」——必須是看得見的追問，
+  // 不能是默默記成一筆錯的帳。
   {
+    // 兩個金額 → 無法決定總額 → 停下來問，而不是猜一個。
     input: "午餐 120，Uber 245",
-    segments: 2,
-    outcomes: ["draft", "draft"],
-    allocationCounts: [1, 1],
+    segments: 1,
+    outcomes: ["missing_fields"],
+    allocationCounts: [1],
   },
   {
-    input: "午餐 120，Uber 245，雜支 90",
-    segments: 3,
-    outcomes: ["draft", "draft", "missing_fields"],
-    // 「雜支」無從判斷分類，但金額已知：留下「待分類」後援殼，才追問得起來。
-    allocationCounts: [1, 1, 1],
+    // 千分位。以前 `,` 是分隔符，這句被切成「薪水 +85」與「000」**兩筆**，
+    // 兩筆都看起來合法、都會成案——八萬五的收入變成 85 元加一筆 0 元。
+    //
+    // 現在它是一段，但**金額解析器仍然吃不下千分位**：同一段裡看到 `+85` 與 `000`
+    // 兩個數字，無法決定總額。而且配置筆數是 **0** —— 依本檔開頭那段說明，
+    // 配置為空的 missing_fields 會被 create-batch 降級成「無法解析」，
+    // **追問流程整條消失**：使用者看到的是「無法解析這筆輸入」，必須整句重打，
+    // 而不是補一個金額就好。
+    //
+    // 所以這個改動把千分位從「默默記成兩筆錯帳」變成「看得見地拒絕」，
+    // 是改善但不是支援。使用者（2026-10-02）確認自己不打千分位，所以不擴大範圍去改
+    // parseAmountCandidates；這條語料的作用是把現況釘住，日後要支援時這裡會先紅。
+    input: "薪水 +85,000",
+    segments: 1,
+    outcomes: ["missing_fields"],
+    allocationCounts: [0],
   },
-  {
-    input: "午餐 120，午餐 60",
-    segments: 2,
-    outcomes: ["draft", "draft"],
-    allocationCounts: [1, 1],
-  },
+
+  // M3a 批次
   {
     input: "午餐 120\nUber 245",
     segments: 2,
@@ -63,31 +73,44 @@ export const parserCorpus: readonly CorpusCase[] = [
     allocationCounts: [1, 1],
   },
   {
-    input: "午餐 120、Uber 245",
+    input: "午餐 120\nUber 245\n雜支 90",
+    segments: 3,
+    outcomes: ["draft", "draft", "missing_fields"],
+    // 「雜支」無從判斷分類，但金額已知：留下「待分類」後援殼，才追問得起來。
+    allocationCounts: [1, 1, 1],
+  },
+  {
+    input: "午餐 120\n午餐 60",
     segments: 2,
     outcomes: ["draft", "draft"],
     allocationCounts: [1, 1],
   },
   {
-    input: "午餐 120，，Uber 245",
+    input: "午餐 120\n\nUber 245",
     segments: 2,
     outcomes: ["draft", "draft"],
     allocationCounts: [1, 1],
   },
   {
-    input: "薪水 +85000，午餐 120",
+    input: "午餐 120\n   \nUber 245",
     segments: 2,
     outcomes: ["draft", "draft"],
     allocationCounts: [1, 1],
   },
   {
-    input: "國泰卡刷 1200，午餐 120",
+    input: "薪水 +85000\n午餐 120",
+    segments: 2,
+    outcomes: ["draft", "draft"],
+    allocationCounts: [1, 1],
+  },
+  {
+    input: "國泰卡刷 1200\n午餐 120",
     segments: 2,
     outcomes: ["missing_fields", "draft"],
     allocationCounts: [1, 1],
   },
   {
-    input: "台新轉國泰 1000 手續費 15，午餐 120",
+    input: "台新轉國泰 1000 手續費 15\n午餐 120",
     segments: 2,
     outcomes: ["draft", "draft"],
     allocationCounts: [2, 1],

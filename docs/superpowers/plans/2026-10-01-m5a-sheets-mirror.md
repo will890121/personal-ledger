@@ -311,6 +311,12 @@ Run：同 Step 5。Expected：PASS，3 條。
 
 - [ ] **Step 8: 跑完整檢查**
 
+**預期會有既有測試變紅，這是正常的。** 專案裡有數個測試把 migration 版本清單或
+`/status` 的「schema 版本：N」字串寫死 —— 它們存在的目的就是在有人新增 migration 時
+發出訊號。看到它們紅了不要懷疑自己的改動，把版本 9 補進去即可。
+**最小幅度更新**（清單追加 `{ version: 9 }`、字串改成 9），不要放寬或重寫這些斷言 ——
+放寬等於把哨兵拆掉。
+
 Run：`docker run --rm -v "$PWD":/app -v personal-ledger-modules:/app/node_modules -w /app personal-ledger:deps pnpm check`
 Expected：exit 0。
 
@@ -399,7 +405,19 @@ export interface SyncCursor {
 - [ ] **Step 2: 寫失敗的測試**
 
 `tests/db/sheet-sync-changes.test.ts`。先寫一個 seed 工具，直接以 SQL 塞資料（不經過
-application 層，這個 task 測的是查詢本身）：
+application 層，這個 task 測的是查詢本身）。
+
+> **2026-10-01 更正：下面這段 seed 與真實 schema 不符，實作時已修正。**
+> 它是照著 migration 檔案寫的、從未執行過 —— 也就是一個假設，不是事實。實際差異：
+> `input_events` 沒有 `chat_id`／`message_id`（真實欄位是 `telegram_update_id`、
+> `source_type`、`source_ref`）；`drafts` 的 `request_id` 與 `draft_json` 是 NOT NULL
+> 但 seed 沒給；`categories` 的 `kind` 與 `depth` 是 NOT NULL，且有 CHECK 綁定
+> `depth = 1` 時 `parent_id` 必須為 NULL。
+>
+> （原本這裡還寫了「`transactions` 那句 `.run()` 傳了 12 個值對 11 個佔位符」——
+> **那一項是錯的**，我照實作者的回報寫上去而沒有自己數。審查員逐字元數過是 11 對 11，
+> 我複驗確認。其餘四項差異是真的。）
+> **以 `tests/db/sheet-sync-changes.test.ts` 的實際內容為準**，下面保留原文只為記錄。
 
 ```ts
 import Database from "better-sqlite3";
@@ -474,7 +492,7 @@ describe("listChangedTransactions", () => {
   });
 
   it("includes the row sitting exactly on the cursor", async () => {
-    // 游標語意是 >= 而不是 >。重寫邊界那一列是冪等的、代價為零；
+    // 2026-10-01 更正：游標語意改為 tuple 上的嚴格 >。理由見 spec §3 ——
     // 而用 > 的話，下面那條同毫秒的測試會永久漏掉一筆。
     seedTransaction(database, { id: "t1", updatedAt: "2026-10-01T00:00:00.000Z" });
 
@@ -1016,7 +1034,7 @@ git commit -m "feat: 把交易與配置投影成具型別的儲存格"
 ```ts
 import { describe, expect, it } from "vitest";
 
-import { affectedMonths, monthRange } from "../../src/domain/sheet-months.js";
+import { affectedMonths, monthRange, monthlySummaryRow } from "../../src/domain/sheet-months.js";
 
 describe("affectedMonths", () => {
   it("returns the month of each changed transaction", () => {
@@ -1054,6 +1072,57 @@ describe("affectedMonths", () => {
     expect(affectedMonths([{ transactionId: "t1", occurredDate: "2026-10-05" }], previous)).toEqual(
       ["2026-10"],
     );
+  });
+});
+
+describe("monthlySummaryRow", () => {
+  it("places each of the eight figures under its own heading", () => {
+    // 2026-10-01 補：原本這份計畫完全沒有測 monthlySummaryRow —— 相鄰兩個欄位對調
+    // 會讓使用者的試算表把錯的數字放在錯的標題下，而整套檢查不會有任何反應。
+    // 標題列與資料列是由兩段不同的程式寫出去的，所以位置必須逐一釘住。
+    const summary = {
+      actualInflow: { amount: "1", currency: "TWD" as const },
+      actualOutflow: { amount: "2", currency: "TWD" as const },
+      netCashFlow: { amount: "3", currency: "TWD" as const },
+      personalIncome: { amount: "4", currency: "TWD" as const },
+      grossPersonalExpense: { amount: "5", currency: "TWD" as const },
+      refunds: { amount: "6", currency: "TWD" as const },
+      netPersonalExpense: { amount: "7", currency: "TWD" as const },
+      personalBalance: { amount: "8", currency: "TWD" as const },
+      categories: [],
+    };
+
+    const row = monthlySummaryRow("2026-10", summary, new Date("2026-10-01T00:00:00.000Z"));
+
+    expect(row).toEqual([
+      { kind: "string", value: "2026-10" },
+      { kind: "number", value: 1 },
+      { kind: "number", value: 2 },
+      { kind: "number", value: 3 },
+      { kind: "number", value: 4 },
+      { kind: "number", value: 5 },
+      { kind: "number", value: 6 },
+      { kind: "number", value: 7 },
+      { kind: "number", value: 8 },
+      { kind: "string", value: "2026-10-01T00:00:00.000Z" },
+    ]);
+  });
+});
+
+describe("affectedMonths sorting", () => {
+  it("returns months sorted regardless of the order they were discovered", () => {
+    // 排序原本只是「剛好」被跨月那條測到（它的 fixture 正好是反序）。
+    // 這條直接咬住排序本身。
+    expect(
+      affectedMonths(
+        [
+          { transactionId: "t1", occurredDate: "2026-12-01" },
+          { transactionId: "t2", occurredDate: "2026-01-01" },
+          { transactionId: "t3", occurredDate: "2026-06-01" },
+        ],
+        new Map(),
+      ),
+    ).toEqual(["2026-01", "2026-06", "2026-12"]);
   });
 });
 
@@ -1699,6 +1768,41 @@ describe("convergence", () => {
     // 模擬那筆 M1 沒有稽核事件、且游標已經越過它的交易：
     // 游標設在它之後，跑 syncOnce() 不會處理它，跑 reconcile() 會。
   });
+
+  it("clears a transactions row whose id no longer exists in sqlite", async () => {
+    // 與配置列同一種結構性缺口，但在 Transactions 分頁上。
+    // 另外：鍵欄若出現重複的 id，目前是後寫獲勝、較早那一列成為永久的殭屍列。
+    // 兩者都要在校正時清掉，否則「Sheet 是 SQLite 的投影」這個不變量不成立。
+    //
+    // **2026-10-01 收窄（重要）**：只清「A 欄是 UUID 形狀、而該 UUID 不在 SQLite 裡」
+    // 的列。**不是**清掉所有 A 欄非空的列。
+    // 交易與配置的 id 都來自 `randomUUID()`，所以「UUID 形狀」精確等於
+    // 「這一列可能是鏡像自己寫的」。使用者手打的備註列、貼上來對照的資料、
+    // 自己加的標記，都不是 UUID，因此不會被動到。
+    //
+    // 原本的寬版規則會讓使用者自己加的任何一列每天被默默清空一次 ——
+    // 那是不可逆的資料破壞，而且沒有任何提示。這個清理要解的問題從來不是
+    // 「使用者加了東西」，而是「鏡像自己留下的孤兒與重複列」。
+  });
+
+  it("leaves a row the user typed by hand alone", async () => {
+    // 上一條的反面，而且是更重要的那一面：在 Transactions 分頁插一列
+    // A 欄寫「我自己的備註」，跑 reconcile()，斷言它**還在**。
+    // 沒有這一條，寬版規則會在某次重構裡被悄悄寫回來。
+  });
+
+  it("clears an allocation row whose allocation no longer exists", async () => {
+    // 2026-10-01 補（Task 6 實作者發現的缺口）。updateTransaction 是
+    // 「DELETE 全部配置再 INSERT」，所以改一筆交易之後舊的 allocation_id 就永遠消失了。
+    // 若鏡像只 upsert 不清理，Sheet 上會永遠留著那些已經不存在的配置列 ——
+    // 使用者用 Allocations 分頁做樞紐分析時會把它們算進去，金額直接錯。
+    // 這不是裝飾性的問題，是「Sheet 是 SQLite 的投影」這個不變量的破口。
+    //
+    // 做法：Allocations 分頁讀 A:B（allocation_id 與 transaction_id 兩欄），
+    // 對每一筆處理中的交易，找出 Sheet 上掛在它底下、但已經不在它現有配置裡的列，
+    // 把整列清空。清空而不是刪除列：刪除會讓列號位移，而清空是冪等的，
+    // 且定位一律靠 id、不靠位置。空白列會累積，這是已知且接受的代價。
+  });
 });
 ```
 
@@ -1709,8 +1813,31 @@ describe("convergence", () => {
 而且沒人會發現（spec §3）。用同一個內部函式，差別只在 cursor 與要不要寫
 `lastReconciledAt`。
 
-`reconcile` 的批次上限與 `syncOnce` 相同（`SYNC_BATCH`）。資料量超過一批時，
-一次 `reconcile` 只處理一批，游標推進，下一輪繼續 —— 校正是漸進的，不需要一次掃完。
+> **2026-10-01 更正（Task 6 實作時發現的計畫缺陷）：照字面做會讓游標倒退。**
+> 全表掃描的第一批是最舊的交易，若直接把游標存成那一批的最後一筆，游標就從「今天」
+> 倒退回幾個月前，之後的增量同步要重走一遍所有東西 —— 不會遺失資料（寫入是冪等的），
+> 但每天的校正等於把整個同步重啟一次。
+> **游標只能前進**：存檔前與現有游標比較，取較晚的那一個。Task 6 已實作 `laterCursor()`，
+> 在增量路徑上是 no-op。
+
+**`reconcile` 必須在一次呼叫內自己分頁，用自己的區域游標。**
+
+> **2026-10-01 更正。** 這裡原本寫「一次只處理一批，游標推進，下一輪繼續」——
+> 那句話在 `laterCursor` 之後是**假的**，兩者直接矛盾。
+
+問題：`reconcile` 傳 `cursor = null`，查詢永遠回傳**最舊**的 `SYNC_BATCH` 筆；
+`laterCursor` 又會把這一批的推進丟掉（持久游標已經在前面）。結果是每次校正都只重驗最舊的
+200 筆，**永遠到不了其餘資料**。Task 6 審查實測 250 筆交易連跑五次 `reconcile`：
+每次都停在 `cursor=t0199`、Sheet 上 200 列，而 `reconcile` 仍回報 `synced`。
+
+這會殺掉自我修復，而自我修復是這整個設計的賣點（spec §2、§9）：被手動改壞的第 500 列
+永遠不會被修正。
+
+做法：`reconcile()` 用一個**區域**游標在一次呼叫內往前分頁，直到查詢回傳少於 `SYNC_BATCH`
+筆為止，並加一個迭代上限當保險。持久游標仍然只透過 `laterCursor` 前進。
+
+**必須有一條跨越 `SYNC_BATCH` 邊界的測試**：用比 `SYNC_BATCH` 多的交易跑一次 `reconcile`，
+斷言最後一筆也出現在 Sheet 上。沒有這條測試，這個洞會再一次全綠出貨。
 
 - [ ] **Step 3: 跑測試、完整檢查、提交**
 
@@ -1930,11 +2057,36 @@ it.each([
 
 **不得使用 `valueInputOption: USER_ENTERED`**（spec §4：公式注入）。
 
+**`readColumns` 必須帶 `valueRenderOption: "UNFORMATTED_VALUE"`，這不是可選的。**
+Google 的 `values.get` 預設是 `FORMATTED_VALUE`，日期欄會回傳 `"2026/9/28"` 這類字串；
+引擎對那一欄做的是 `Number(raw)`，於是得到 NaN、舊日期被靜默丟棄，
+**跨月搬移的舊月份摘要永遠不會被重算（Review Focus #1 直接失效），而所有測試依然全綠**
+——因為測試替身存的是序列值。Task 6 的審查已用探針實測確認這條路徑。
+`src/ports/sheets-client.ts` 的文件註解也要寫明「日期欄回傳的必須是未格式化的序列值」。
+
+- [ ] **Step 3b: 標題列要有人寫**
+
+Task 7 的審查發現：**`src/` 裡沒有任何程式會寫標題列。** `TRANSACTIONS_HEADER` 目前只被
+用來算空白列的寬度。也就是說面對一張全新的試算表，鏡像會從第 2 列開始塞資料，
+第 1 列永遠是空的 —— 使用者看到的是一堆沒有欄位名稱的數字，而測試替身的「空標題豁免」
+正好把這件事遮住了。
+
+因此：接線時若分頁的第 1 列為空，先寫入對應的 header 常數。三張分頁都要。
+要有測試釘住「空試算表第一次同步後，三張分頁的第 1 列是正確的標題」。
+
 - [ ] **Step 4: 接線**
 
 `src/main.ts`：`config.sheets` 為 null 就完全不建立 mirror 與 runner。
 非 null 才建立，並在 `outboxRunner.start()` 之後 `sheetRunner.start()`，
 `close()` 裡一併 `stop()`。
+
+**同時把 runner 的 `logError` 接上真正的 logger。** Task 9 的 runner 不能 import
+`src/logger.ts`（那個檔案 import grammY，而 `src/sheets/` 不得依賴 grammY），所以它改成
+注入一個窄介面 `logError(message, fields?)`。**接線時必須把 `logger.error` 傳進去，
+否則正式環境的同步失敗完全不會被記錄** —— 而且測試全綠，因為測試傳的是自己的假函式。
+
+要有測試釘住這件事：把 `main.ts` 傳進去的那個函式換成 no-op，必須有測試變紅。
+這正是 M4 的 AC-24 踩過的坑 —— 元件測試全綠，但沒有人問過「`main.ts` 有沒有真的接上」。
 
 **同時把 Task 8 的升級接到 Telegram。** Task 8 只定義了注入點
 `onNeedsAttention(state)`，真正送出通知是在這裡接的：沿用 `src/telegram/notify-attention.ts`
@@ -1973,6 +2125,14 @@ Expected：兩條 `refuses to start when only ... is set` 變紅。
 連續失敗次數、最後一個錯誤類別。鏡像關閉時顯示「未啟用」而不是空白或 0 ——
 空白會讓人以為壞了。
 
+**2026-10-01 追加：還要顯示「最後完整校正時間」（`lastReconciledAt`）。**
+Task 7 的審查發現兩件事合起來會變成無聲的資料缺口：帳本超過
+`RECONCILE_MAX_PAGES × SYNC_BATCH`（約兩萬筆）時校正會靜默停止收斂，
+而且 **`grep` 整個 repo 沒有任何一行讀 `lastReconciledAt`** ——
+截斷的 outcome 與完整成功一模一樣。照原計畫走完 M5a，這個狀況沒有任何人看得到。
+`/status` 要顯示它，而且「從未完整校正過」與「今天已完整校正」必須是兩種不同的顯示。
+同時 `SyncOutcome` 要能區分「完整掃完」與「被上限截斷」，否則 `/status` 無從得知。
+
 測試要釘住每一個欄位（拿掉任一個都要有測試變紅），並釘住「未啟用」與「啟用但從未同步」
 是兩種不同的顯示。
 
@@ -1990,6 +2150,20 @@ git commit -m "feat: /status 顯示 Sheets 鏡像狀態"
 - Delete: `docs/todo/outbox-delivery-logging.md`
 - Test: `tests/sheets/sheet-mirror-logging.test.ts`、`tests/telegram/outbox-logging.test.ts`
 
+**這個 task 的第一件事：把 grammY 從 `src/logger.ts` 拿掉。**
+
+`src/logger.ts:3` 目前 `import { GrammyError } from "grammy"`，第 61 行用 `instanceof` 判斷。
+因此 `src/sheets/` 不能使用 logger 而不違反「sheets 不依賴 grammY」的邊界 ——
+Task 8 的實作者只好讓 best-effort 的 catch 靜默吞掉，Task 9 只好改成注入 `logError`。
+兩個 task 都被同一個耦合繞了路。
+
+改成**鴨子型別**判斷（檢查 `error_code` 與 `description` 兩個屬性）而不是 `instanceof`。
+logger 是全專案的單一日誌出口，它本來就不該知道 grammY 的存在。
+M4 的整分支審查也曾因為同一個耦合，讓「0 列」的記錄被推到 telegram 層。這次從根上解掉。
+
+既有的兩條 logger 測試（保留 GrammyError 的 code 與 description、把 SQLite 錯誤縮成類別名）
+必須維持綠燈 —— 它們是這個改動唯一的安全網。
+
 M4 驗收發現：刻意製造的整場遞送事故在 `docker logs` 裡沒有留下任何一行。
 `/status` 顯示當下狀態，事故結束就不留痕跡，事後答不出「發生過幾次」。
 兩條管線要用**同一套記錄慣例**。
@@ -2004,6 +2178,15 @@ M4 驗收發現：刻意製造的整場遞送事故在 `docker logs` 裡沒有�
 | outbox 送出失敗、排定退避重試 | `info` |
 | outbox 用盡上限轉 needs_attention | `warn` |
 | `notify-attention` 自己送不出去 | `warn`（目前全專案最安靜的失敗路徑） |
+| **校正被頁數上限截斷**（`SyncOutcome.scannedToEnd === false`） | `warn` |
+
+最後那一條是 2026-10-01 追加的。Task 11 把 `scannedToEnd` 加進了 `SyncOutcome`，
+但**目前只有測試在讀它** —— runner 與 main 都沒有對它做任何事。
+截斷代表「今天的校正沒跑完、還有資料沒被驗證」，那是需要留下痕跡的事件：
+`lastReconciledAt` 不前進是唯一的被動訊號，而主動的一行日誌能讓人在事後看得出發生過。
+
+**同時要先拆掉 logger 對 grammY 的依賴**（見本 task 的第一件事），
+否則 `src/sheets/` 根本無法記錄這一行。
 
 **可以記**：內部識別碼、錯誤類別與狀態碼、筆數、耗時。
 **不可以記**：訊息本文、財務原文、帳戶／商家／對象名稱、金額。
@@ -2086,6 +2269,30 @@ if (!keyFile || !spreadsheetId) {
 M4 有一個潛伏 bug 同時存在於真實實作與測試替身裡，因為替身只是「回傳看起來對的東西」；
 最後是靠 5 種情境的差分測試才證明兩者語意一致。替身一旦與真實行為漂移，
 所有用替身寫的單元測試就同時失去意義——而且不會有任何一條變紅。
+
+- [ ] **Step 3b: 部署邊界（2026-10-01 追加，Task 10 發現）**
+
+`compose.yaml` 用的是明列式 `environment:`，**兩個新變數沒有被轉發**，而且沒有掛載金鑰檔。
+
+後果比「沒生效」更糟：使用者在 `.env` 裡把兩個變數都設好、重啟，從容器內部看卻是
+**兩個都沒設** → 鏡像靜默關閉。而 Task 10 特地加的「只設一半就拒絕啟動」那個守衛
+**根本不會觸發**，因為在容器的視角裡這是「零設定」而不是「半設定」。
+Review Focus #5 在更上一層原封不動地重演了一次。
+
+要做的：
+
+1. `compose.yaml` 的 `environment:` 加上 `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` 與
+   `SHEET_SPREADSHEET_ID` 兩行轉發。
+2. 金鑰檔以**唯讀**掛載進容器。約定路徑：主機 `./secrets/google-service-account.json`
+   → 容器 `/app/secrets/google-service-account.json`，並讓 `.env` 裡的
+   `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` 指向容器內那個路徑。
+3. `.gitignore` 加 `secrets/`。金鑰絕不能進版控 —— 現在只有 `.env` 被排除。
+4. 驗收文件寫清楚三步設定：GCP 建專案並啟用 Sheets API、建服務帳號下載 JSON 金鑰放到
+   `secrets/`、把試算表分享給服務帳號的 email（編輯權限）。
+
+**注意目前線上容器不是用 compose 起的**（是 `docker run --env-file .env` 手動建的），
+兩條路徑都要能用：compose 檔是 repo 的宣告式記錄，而手動那條是現在實際在跑的。
+驗收文件要說明這件事。
 
 - [ ] **Step 4: 文件**
 

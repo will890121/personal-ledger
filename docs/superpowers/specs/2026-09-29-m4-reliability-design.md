@@ -188,8 +188,9 @@ schema 版本：8
   午餐 1000，三個人平分
   小明還 300
 
-一次多筆
-  午餐 120，Uber 245
+一次多筆（換行分隔）
+  午餐 120
+  Uber 245
 
 指令
   /pending /advances /recent /today /month /keywords /status

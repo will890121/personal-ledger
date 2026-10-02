@@ -2,11 +2,68 @@ import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 
 import { createLedgerBot } from "../../src/telegram/create-bot.js";
+import type { SheetsMirrorStatusDependencies } from "../../src/telegram/dependencies.js";
 import { SCHEMA_VERSION } from "../../src/db/migrate.js";
 import { summarizeAllocations } from "../../src/domain/ledger-summary.js";
-import { timeOfDayInTimezone } from "../../src/timezone.js";
+import type { MirrorTransaction, SheetSyncState } from "../../src/ports/sheet-sync-repository.js";
+import { dateInTimezone, timeOfDayInTimezone } from "../../src/timezone.js";
 import { FakeLedgerRepository } from "./fake-ledger-repository.js";
 import { FakeReferenceRepository } from "./fake-reference-repository.js";
+
+/** 一筆用來墊 listChangedTransactions 回傳數量的假交易，內容不重要——只用來算長度。 */
+function fillerTransaction(index: number): MirrorTransaction {
+  return {
+    transactionId: `sheet-backlog-${String(index)}`,
+    occurredDate: "2026-09-18",
+    occurredTime: null,
+    amount: "0",
+    accountFromName: null,
+    accountToName: null,
+    merchantName: null,
+    counterpartyName: null,
+    note: null,
+    rawInputSnapshot: null,
+    status: "confirmed",
+    confirmedAt: "2026-09-18T00:00:00.000Z",
+    updatedAt: "2026-09-18T00:00:00.000Z",
+    allocations: [],
+  };
+}
+
+export interface HarnessSheetsMirrorOptions {
+  readonly state?: Partial<SheetSyncState>;
+  /** 模擬 listChangedTransactions 回傳的筆數，用來驗證「落後」欄位。 */
+  readonly changedCount?: number;
+}
+
+/**
+ * 組出 /status Sheets 區段用的假依賴。只有 status-command.test.ts 需要真的區分
+ * 「啟用」與「關閉」，其餘測試一律不傳 `sheetsMirror`、維持關閉，行為不變。
+ */
+function buildFakeSheetsMirror(
+  options: HarnessSheetsMirrorOptions,
+): SheetsMirrorStatusDependencies {
+  const state: SheetSyncState = {
+    ownerId: "123",
+    cursorUpdatedAt: null,
+    cursorTransactionId: null,
+    lastSuccessAt: null,
+    lastError: null,
+    consecutiveFailures: 0,
+    lastReconciledAt: null,
+    ...options.state,
+  };
+  const changed = Array.from({ length: options.changedCount ?? 0 }, (_, index) =>
+    fillerTransaction(index),
+  );
+  return {
+    syncRepository: {
+      loadSyncState: () => Promise.resolve(state),
+      listChangedTransactions: (_ownerId, _cursor, limit) =>
+        Promise.resolve(changed.slice(0, limit)),
+    },
+  };
+}
 
 export interface ApiCall {
   readonly method: string;
@@ -47,6 +104,12 @@ export interface HarnessOptions {
    * 使用。回傳的 `deliveryControl` 讓測試在流程中途切換，不必重建整個 harness。
    */
   readonly failDelivery?: boolean;
+  /**
+   * /status 的 Sheets 區段用。省略（`undefined`）代表鏡像關閉——大多數測試不關心
+   * Sheets，維持這個預設值才不必逐一改寫既有測試。傳物件（即使是 `{}`）代表
+   * 鏡像啟用，欄位預設是「從未同步過」的零狀態。
+   */
+  readonly sheetsMirror?: HarnessSheetsMirrorOptions;
 }
 
 /** 讓測試在草稿確認之後，切換「Telegram 是否還連得上」。 */
@@ -73,6 +136,9 @@ export function createHarness(options: HarnessOptions = {}) {
     // 固定用 Asia/Taipei：正式環境設定的就是這個時區，/status 的時區測試需要一個
     // 真的與 UTC 有偏移的時區，才能把「忘記轉時區、直接印 UTC」這種退步抓出來。
     timeOfDay: (at) => timeOfDayInTimezone(at, "Asia/Taipei"),
+    dateOf: (at) => dateInTimezone(at, "Asia/Taipei"),
+    sheetsMirror:
+      options.sheetsMirror === undefined ? null : buildFakeSheetsMirror(options.sheetsMirror),
     schemaVersion: SCHEMA_VERSION,
     botInfo: {
       id: 1,

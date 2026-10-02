@@ -41,7 +41,7 @@ describe("createBatch", () => {
   it("creates one draft per segment under a shared batch", async () => {
     const { dependencies, repository } = setup();
 
-    const result = await createBatch({ ...baseCommand, text: "午餐 120，午餐 60" }, dependencies);
+    const result = await createBatch({ ...baseCommand, text: "午餐 120\n午餐 60" }, dependencies);
 
     expect(result.kind).toBe("batch");
     if (result.kind !== "batch") return;
@@ -60,7 +60,7 @@ describe("createBatch", () => {
 
     // 缺欄位的段落必須自己帶金額才會獨立成段：不含金額的段落會依切分規則併回前一段。
     const result = await createBatch(
-      { ...baseCommand, text: "午餐 120，午餐 60，雜支 90" },
+      { ...baseCommand, text: "午餐 120\n午餐 60\n雜支 90" },
       dependencies,
     );
 
@@ -105,7 +105,7 @@ describe("createBatch", () => {
     const text = Array.from(
       { length: MAX_SEGMENTS + 1 },
       (_, index) => `午餐 ${String(index + 1)}`,
-    ).join("，");
+    ).join("\n");
 
     const result = await createBatch({ ...baseCommand, text }, dependencies);
 

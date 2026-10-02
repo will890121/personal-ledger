@@ -14,6 +14,7 @@
     "start": "node --enable-source-maps dist/src/main.js",
     "build": "tsc -p tsconfig.json && mkdir -p dist/src/db/migrations && cp src/db/migrations/*.sql dist/src/db/migrations/",
     "test:run": "vitest run",
+    "test:sheets": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -25,6 +26,7 @@
   "dependencies": {
     "better-sqlite3": "^12.4.1",
     "decimal.js": "^10.6.0",
+    "googleapis": "^182.0.0",
     "grammy": "^1.38.4",
     "zod": "^4.2.1"
   },

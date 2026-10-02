@@ -107,11 +107,28 @@ docker compose up -d
 
 啟動時會自動依序執行 migration 與參照資料 bootstrap。任何 migration 或完整性檢查失敗都會停止啟動，不會開始 Telegram polling。`ledger-data` volume 保存 `/app/data/personal-ledger.sqlite`；憑證只由本機 `.env` 注入，不會複製進 image。
 
+## Google Sheets 鏡像（選填）
+
+帳本會單向鏡像到一張 Google Sheet 的 `Transactions`／`Allocations`／`MonthlySummary`
+三張分頁。Sheet 是 SQLite 的投影，鏡像故障不影響記帳。設定與人工驗收步驟見
+[M5a 驗收證據](docs/quality/m5a-acceptance.md)，摘要三步：
+
+1. 在 GCP 建專案、啟用 Google Sheets API。
+2. 建服務帳號、下載 JSON 金鑰，放到 `secrets/google-service-account.json`（`secrets/` 已
+   列入 `.gitignore`，金鑰絕不進版控）。
+3. 把試算表分享給服務帳號的 email（**編輯**權限），並在 `.env` 填入
+   `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` 與 `SHEET_SPREADSHEET_ID`。
+
+兩個變數是一組的：兩個都不填＝鏡像關閉（bot 照常運作），只填一半＝拒絕啟動。
+`/status` 會顯示鏡像目前的狀態。
+
 ## 驗收
 
 - [M1 驗收證據](docs/quality/m1-acceptance.md)
 - [M2 驗收證據](docs/quality/m2-acceptance.md)
 - [M3a 驗收證據](docs/quality/m3a-acceptance.md)
 - [M3b 驗收證據](docs/quality/m3b-acceptance.md)
+- [M4 驗收證據](docs/quality/m4-acceptance.md)
+- [M5a 驗收證據](docs/quality/m5a-acceptance.md)
 
 每個里程碑只有在自動檢查與人工 Telegram 驗收都完成後才算結案。

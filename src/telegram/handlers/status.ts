@@ -1,16 +1,58 @@
 import type { Bot } from "grammy";
 
-import type { LedgerBotDependencies } from "../dependencies.js";
-import { formatStatus } from "../format-status.js";
+import type { LedgerBotDependencies, SheetsMirrorStatusDependencies } from "../dependencies.js";
+import { formatStatus, type SheetsStatusView } from "../format-status.js";
 import type { DraftPrompt } from "../format-prompt.js";
+
+/**
+ * 「落後幾筆」的查詢上限：比任何正常情況下真的會發生的落後量都大得多
+ * （正常情況下每 20 秒就會同步掉，落後量幾乎永遠是個位數）。撞到這個上限
+ * 就代表狀況已經嚴重到不需要精確數字，只需要知道「很多」，所以畫面上印成
+ * 「5000+ 筆」而不是耗費一次可能昂貴的全表查詢去算出精確值。
+ */
+const BACKLOG_QUERY_LIMIT = 5000;
+
+/**
+ * 讀出 /status 的 Sheets 區段要顯示的原始資料。`null` 代表鏡像整個關閉
+ * （config.sheets 為 null），這裡不做任何格式化——時區換算留給 formatStatus。
+ */
+async function loadSheetsStatus(
+  sheetsMirror: SheetsMirrorStatusDependencies | null,
+  ownerId: string,
+): Promise<SheetsStatusView | null> {
+  if (sheetsMirror === null) return null;
+
+  const state = await sheetsMirror.syncRepository.loadSyncState(ownerId);
+  const cursor =
+    state.cursorUpdatedAt !== null && state.cursorTransactionId !== null
+      ? { updatedAt: state.cursorUpdatedAt, transactionId: state.cursorTransactionId }
+      : null;
+  const changed = await sheetsMirror.syncRepository.listChangedTransactions(
+    ownerId,
+    cursor,
+    BACKLOG_QUERY_LIMIT,
+  );
+
+  return {
+    lastSuccessAt: state.lastSuccessAt,
+    lastError: state.lastError,
+    consecutiveFailures: state.consecutiveFailures,
+    lastReconciledAt: state.lastReconciledAt,
+    backlog: changed.length,
+    backlogAtLimit: changed.length === BACKLOG_QUERY_LIMIT,
+  };
+}
 
 async function renderStatus(dependencies: LedgerBotDependencies): Promise<DraftPrompt> {
   const summary = await dependencies.repository.summarizeOutbox(dependencies.ownerId);
+  const sheets = await loadSheetsStatus(dependencies.sheetsMirror, dependencies.ownerId);
   return formatStatus(
     summary,
     dependencies.schemaVersion,
     dependencies.now(),
     dependencies.timeOfDay,
+    dependencies.dateOf,
+    sheets,
   );
 }
 
@@ -40,10 +82,5 @@ export function registerStatusHandlers(bot: Bot, dependencies: LedgerBotDependen
     await context.editMessageText(view.text, {
       ...(view.replyMarkup ? { reply_markup: view.replyMarkup } : {}),
     });
-  });
-
-  bot.callbackQuery("dismiss-status", async (context) => {
-    await context.answerCallbackQuery();
-    await context.deleteMessage();
   });
 }

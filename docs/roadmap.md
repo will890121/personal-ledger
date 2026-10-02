@@ -135,15 +135,72 @@ M2 的解析器只認得「午餐」一個關鍵字，其餘句子只要帶得�
 
 ### M5：Google Sheets、備份與維護 CLI
 
+M5 拆成三塊，順序 a → b → c。M5a 先做，因為使用者要把 Sheet 當成主要的查看介面。
+設計見 [`docs/superpowers/specs/2026-09-30-m5a-sheets-mirror-design.md`](superpowers/specs/2026-09-30-m5a-sheets-mirror-design.md)。
+
+#### M5a：Google Sheets 單向鏡像
+
+狀態：**完成並驗收**（2026-10-03，schema 9，90 檔 / **670 個測試**，
+M4 結案時的起點是 510）。三道關卡全部通過（與
+[`docs/quality/m5a-acceptance.md`](quality/m5a-acceptance.md) 同一種切法：
+`pnpm test:sheets` 併在關卡一，不算獨立的第四道）：
+
+| 關卡 | 狀態 |
+|---|---|
+| 自動驗證（`pnpm check` exit 0，另加 `pnpm test:sheets` 對真實試算表跑綠） | ✅ `pnpm check` exit 0；**`pnpm test:sheets` 15/15 對真實 Google Sheets 通過**（2026-10-03） |
+| 整個分支的程式審查 | ✅ 13 輪任務審查＋整分支審查（25 變異／5 探針）＋修正波次與複審 |
+| 人工驗收清單 | ✅ 完成，期間發現四個缺陷並修正（見下） |
+
+**人工驗收期間發現並修正的缺陷：**
+
+1. `/status` 的「最後成功同步」只印時分不印日期。`lastSuccessAt` 只在真的寫入時才更新
+   （閒置的 tick 早退），所以 14 小時前的同步顯示成「11:19」，看起來像剛剛才同步過 ——
+   而分辨「沒有新帳所以沒動」與「壞掉很久了」正是 `/status` 存在的理由。兩個時間戳
+   現在走同一個格式化函式。
+2. `/status` 被誤分類成清單，帶了多餘的「關閉清單」。它是**報表**：沒有分頁、沒有項目、
+   沒有逐項操作。`/today`、`/month` 同屬報表，從一開始就是零按鈕。
+   M4 驗收清單第 9 項一併作廢。
+3. **半形逗號切斷千分位。** `,` 曾經是多筆分隔符，於是「薪水 +85,000」被切成
+   「薪水 +85」與「000」**兩筆**，兩筆都看起來合法、都會成案。分隔符改成**只有換行**，
+   `split-input.ts` 從 38 行縮成 9 行（整組「切錯再黏回去」的啟發式刪除）。
+   已知限制：金額解析器仍吃不下千分位，現在會回「無法解析」而非默默記錯。
+4. 驗收文件給的 `pnpm test:sheets` 指令**在這台機器上跑不起來**（寫成主機版
+   `pnpm`，但本專案所有指令都在 Docker 裡跑）。改成 Docker 形式，而且更安全 ——
+   `--env-file .env` 會把正式 `SHEET_SPREADSHEET_ID` 帶進容器，防止指向正式試算表的
+   守衛自動就看得到。
+
 交付內容：
 
-- Transactions、Allocations、Accounts、Categories、AuditLog、MonthlySummary 鏡像。
-- 非同步 upsert、1 分鐘新鮮度目標及每日完整校正。
-- SQLite 本機與 Google Drive 每日快照。
-- CSV、JSON、SQLite 匯出。
-- 備份還原、Sheet 校正及永久刪除 CLI。
+- `Transactions`、`Allocations`、`MonthlySummary` 三張分頁的鏡像
+  （Accounts／Categories／AuditLog 的鏡像不在 M5a 範圍內）。
+- 收斂式同步：以 `transactions.updated_at` 為游標、以 id 為鍵 upsert，
+  20 秒增量同步（1 分鐘新鮮度目標）、每日凌晨 4 點全表校正、殭屍列清理。
+- 失敗分類（暫時／永久）、連續五次失敗升級成 Telegram 告警並節流十分鐘、
+  `/status` 的鏡像區段、正式日誌遮罩金鑰與試算表 id。
+- migration `0009_sheet_sync_state.sql`（游標與同步狀態）。
+- 明確型別的儲存格寫入：金額是數字（可 SUM）、日期是序列值加日期格式（可排序、
+  可算月份）、以 `=` 開頭的備註留在字面上而不變成公式。
+- 對真實 Sheets 的整合測試與替身差分測試（`pnpm test:sheets`，不在 `pnpm check` 內）。
 
-通過條件：AC-21、AC-22、AC-25、AC-29 通過；在 Sheet API 故障期間仍可正常入帳。
+通過條件：AC-21、AC-22 通過；在 Sheet API 故障期間仍可正常入帳。
+
+驗收紀錄：[`docs/quality/m5a-acceptance.md`](quality/m5a-acceptance.md)
+
+#### M5b：備份排程、異地副本、還原 CLI
+
+狀態：尚未開始。
+
+交付內容：SQLite 本機與 Google Drive 每日快照、備份排程、還原 CLI。
+
+通過條件：AC-25 通過。
+
+#### M5c：匯出與永久刪除 CLI
+
+狀態：尚未開始。
+
+交付內容：CSV、JSON、SQLite 匯出；Sheet 校正 CLI；永久刪除敏感原文。
+
+通過條件：AC-29 通過。
 
 ### M6：Dogfood Release
 
@@ -210,10 +267,18 @@ M2 的解析器只認得「午餐」一個關鍵字，其餘句子只要帶得�
 
 ## 6. 現在要做的事
 
-M0 至 M4 全部完成並上線（2026-09-30，schema 8，510 個測試）。下一個里程碑是
-**M5：Google Sheets、備份與維護 CLI**，尚未開始。
+M0 至 **M5a** 全部完成並上線（2026-10-03，schema 9，670 個測試）。
+Google Sheets 鏡像已啟用並正在同步。
+
+下一個里程碑是 **M5b：備份排程、異地副本、還原 CLI**，尚未開始。
 
 在那之前值得注意的幾件事：
+
+0. ~~`tests/startup.test.ts` 的建置 hook 會在負載高時逾時~~ —— **2026-10-03 已修**。
+   那個 hook 跑一次完整 `pnpm build`，而 vitest 預設只給 10 秒；M5a 驗收期間它紅了四次、
+   連 `docker build` 內的測試階段也中過一次，每一次都與程式對錯無關。逾時放寬到 180 秒。
+   放寬不掩蓋「建置真的變慢」：`pnpm check` 鏈裡的 `pnpm build` 本來就獨立跑一次而且
+   沒有逾時 —— 那 10 秒從來不是效能守衛。
 
 1. 備份已經有可用、已實測的腳本（`scripts/backup.sh`，`VACUUM INTO` + `integrity_check` +
    保留政策），migration 前也已經自動快照（`src/db/pre-migration-snapshot.ts`）。還缺的是

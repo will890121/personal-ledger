@@ -13,8 +13,14 @@ import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
 import { takePreMigrationSnapshot } from "./db/pre-migration-snapshot.js";
 import { SqliteLedgerRepository } from "./db/sqlite-ledger-repository.js";
 import { SqliteReferenceRepository } from "./db/sqlite-reference-repository.js";
+import { SqliteSheetSyncRepository } from "./db/sqlite-sheet-sync-repository.js";
 import { SqliteSummaryRepository } from "./db/sqlite-summary-repository.js";
 import { logger } from "./logger.js";
+import type { SheetsClient } from "./ports/sheets-client.js";
+import { createGoogleSheetsClient } from "./sheets/google-sheets-client.js";
+import { createSheetMirror } from "./sheets/sheet-mirror.js";
+import { createSheetMirrorRunner, type SheetMirrorRunner } from "./sheets/sheet-mirror-runner.js";
+import { createSheetsAttentionNotifier } from "./sheets/notify-sheets-attention.js";
 import { createLedgerBot, registerCommandMenu } from "./telegram/create-bot.js";
 import type { OutboxRunner } from "./telegram/outbox-runner.js";
 import { dateInTimezone, timeOfDayInTimezone } from "./timezone.js";
@@ -26,7 +32,18 @@ export interface Runtime {
   readonly summaryRepository: SqliteSummaryRepository;
   readonly bot: Bot;
   readonly outboxRunner: OutboxRunner;
+  /** `config.sheets` 為 null（沒有憑證）時是 null：鏡像整個關閉，bot 照常運作。 */
+  readonly sheetRunner: SheetMirrorRunner | null;
   readonly close: () => void;
+}
+
+/**
+ * 只給測試用的覆寫。沿用 `createLedgerBot` 的 `outboxRunner` 覆寫欄位裁決過的
+ * 做法：接線層要能被真的走一遍（M4 的 AC-24 就是接線層沒測而讓兩個致命變異存活），
+ * 而真正的 Google client 需要憑證與網路。**正式環境永遠不傳這個參數。**
+ */
+export interface RuntimeOverrides {
+  readonly sheetsClient?: SheetsClient;
 }
 
 // migration 失敗時，快照路徑是唯一能讓人手動還原的線索，所以一定要記下來；
@@ -36,7 +53,62 @@ function recordPreMigrationSnapshot(snapshotPath: string | null): void {
   logger.info("migration 前已建立快照", { snapshot: snapshotPath });
 }
 
-export async function composeRuntime(config: AppConfig): Promise<Runtime> {
+/**
+ * Sheets 鏡像的整條接線，`config.sheets` 為 null 就完全不建立。
+ *
+ * 兩個依賴刻意從這裡注入，因為 `src/sheets/` 不能 import grammY：
+ *   - `logError` 要拿到真正的 `logger.error`。runner 的 tick 是唯一會看到
+ *     「同步整輪拋錯」的地方（Node 24 預設會讓漏接的拒絕殺掉行程，所以那裡一定
+ *     要有 .catch()）；這裡若傳一個 no-op，正式環境的同步失敗就記在任何地方都
+ *     找不到，而所有測試依然全綠——測試注入的是自己的替身。
+ *   - `onNeedsAttention` 要真的送出 Telegram 訊息。Task 8 只定義了注入點。
+ */
+function composeSheetRunner(parts: {
+  readonly config: AppConfig;
+  readonly syncRepository: SqliteSheetSyncRepository;
+  readonly summaryRepository: SqliteSummaryRepository;
+  readonly bot: Bot;
+  readonly overrides: RuntimeOverrides;
+}): SheetMirrorRunner | null {
+  const { config, syncRepository, summaryRepository, bot, overrides } = parts;
+  if (config.sheets === null) return null;
+
+  const sheets =
+    overrides.sheetsClient ??
+    createGoogleSheetsClient({
+      keyFile: config.sheets.keyFile,
+      spreadsheetId: config.sheets.spreadsheetId,
+    });
+  const logError = (message: string, fields?: Record<string, unknown>): void => {
+    logger.error(message, fields);
+  };
+  const mirror = createSheetMirror({
+    ownerId: config.ownerId,
+    sheets,
+    syncRepository,
+    summaryRepository,
+    now: () => new Date(),
+    onNeedsAttention: createSheetsAttentionNotifier({
+      chatId: config.ownerId,
+      api: { sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text) },
+      logError,
+    }),
+  });
+
+  return createSheetMirrorRunner({
+    mirror,
+    syncRepository,
+    ownerId: config.ownerId,
+    timezone: config.timezone,
+    now: () => new Date(),
+    logError,
+  });
+}
+
+export async function composeRuntime(
+  config: AppConfig,
+  overrides: RuntimeOverrides = {},
+): Promise<Runtime> {
   const dataDirectory = dirname(resolve(config.databasePath));
   mkdirSync(dataDirectory, { recursive: true });
 
@@ -52,6 +124,10 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
     await bootstrapReferenceData(referenceRepository, config.ownerId);
     const repository = new SqliteLedgerRepository(database);
     const summaryRepository = new SqliteSummaryRepository(database);
+    // 一律建立，即使 config.sheets 為 null：/status 需要它才能區分「鏡像關閉」
+    // 與「鏡像開著但從未同步」——沒有憑證時鏡像 runner 不會跑，但這個 repository
+    // 本身只是薄薄一層 SQLite 查詢，建立它不代表鏡像跑起來了。
+    const sheetSyncRepository = new SqliteSheetSyncRepository(database);
     const { bot, outboxRunner } = createLedgerBot({
       token: config.telegramBotToken,
       ownerId: config.ownerId,
@@ -62,7 +138,19 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       now: () => new Date(),
       today: () => dateInTimezone(new Date(), config.timezone),
       timeOfDay: (at) => timeOfDayInTimezone(at, config.timezone),
+      dateOf: (at) => dateInTimezone(at, config.timezone),
+      // config.sheets 為 null 代表這台機器沒有 Sheets 憑證：/status 要印「未啟用」，
+      // 不把讀狀態用的 repository 交出去（即使它本身無害，交出去等於暗示鏡像開著）。
+      sheetsMirror: config.sheets === null ? null : { syncRepository: sheetSyncRepository },
       schemaVersion: SCHEMA_VERSION,
+    });
+
+    const sheetRunner = composeSheetRunner({
+      config,
+      syncRepository: sheetSyncRepository,
+      summaryRepository,
+      bot,
+      overrides,
     });
 
     return {
@@ -72,7 +160,13 @@ export async function composeRuntime(config: AppConfig): Promise<Runtime> {
       summaryRepository,
       bot,
       outboxRunner,
-      close: () => database.close(),
+      sheetRunner,
+      close: () => {
+        // 先停 timer 再關資料庫：反過來的話下一輪 tick 會撞上一個已經關掉的
+        // 連線，而那個拒絕只會變成日誌裡一行看不懂的錯誤。
+        sheetRunner?.stop();
+        database.close();
+      },
     };
   } catch (error) {
     database.close();
@@ -107,6 +201,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     databasePath: config.databasePath,
     timezone: config.timezone,
     currency: config.currency,
+    // 只記「開著還是關著」。試算表 id 與金鑰路徑一個都不記——logger 的拒絕清單
+    // 也擋了 spreadsheetId，但第一道防線是呼叫端本來就不要交出去。
+    sheetsMirror: runtime.sheetRunner === null ? "off" : "on",
   });
 
   if (env.LEDGER_STARTUP_CHECK === "1") {
@@ -121,6 +218,8 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   // 背景遞送迴圈只在真正跑起來的行程裡啟動：LEDGER_STARTUP_CHECK 探測與測試都只是
   // 建構 runtime 就結束，不該讓每一次建構都掛一個真的 interval。
   runtime.outboxRunner.start();
+  // 沒有 Sheets 憑證時 sheetRunner 是 null：鏡像整個關閉，bot 照常運作。
+  runtime.sheetRunner?.start();
 
   const stop = (): void => {
     void runtime.bot.stop();
@@ -134,6 +233,8 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
     runtime.outboxRunner.stop();
+    // sheetRunner 的 stop() 在 close() 裡（見 composeRuntime），順序才保證是
+    // 「先停 timer 再關資料庫」。
     runtime.close();
   }
 }

@@ -54,7 +54,7 @@ describe("batch input", () => {
   it("sends one preview per segment and a batch summary for AC-09", async () => {
     const { bot, calls, repository } = harness();
 
-    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120，Uber 245" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120\nUber 245" }));
 
     const sent = texts(calls);
     expect(sent).toHaveLength(3);
@@ -68,7 +68,7 @@ describe("batch input", () => {
   it("previews the parsable segments and prompts for the incomplete one for AC-10", async () => {
     const { bot, calls, repository } = harness();
 
-    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120，Uber 245，雜支 90" }));
+    await bot.handleUpdate(messageUpdate({ updateId: 1, text: "午餐 120\nUber 245\n雜支 90" }));
 
     const sent = texts(calls);
     expect(sent).toHaveLength(4);
@@ -100,7 +100,7 @@ describe("batch input", () => {
 
   it("rejects a message with more than ten segments without creating drafts", async () => {
     const { bot, calls, repository } = harness();
-    const text = Array.from({ length: 11 }, () => "午餐 10").join("，");
+    const text = Array.from({ length: 11 }, () => "午餐 10").join("\n");
 
     await bot.handleUpdate(messageUpdate({ updateId: 1, text }));
 
